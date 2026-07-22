@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>优惠券需求读取器 v2</title>
+<title>优惠券需求读取器</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -18,12 +18,7 @@ h1{font-size:24px;font-weight:700;margin-bottom:4px}
 .upload-area svg{width:40px;height:40px;color:#4361ee;margin-bottom:8px}
 .upload-area p{color:#666;font-size:14px}
 .upload-area .hint{font-size:12px;color:#999;margin-top:4px}
-.config-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
-.config-item label{display:block;font-size:12px;color:#666;margin-bottom:4px;font-weight:500}
-.config-item input{width:100%;padding:7px 10px;border:1px solid #d0d5dd;border-radius:6px;font-size:13px}
-.config-item input:focus{outline:none;border-color:#4361ee;box-shadow:0 0 0 2px rgba(67,97,238,.15)}
 .btn{padding:8px 18px;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
-.btn-primary{background:#4361ee;color:#fff}.btn-primary:hover{background:#3651d4}
 .btn-success{background:#10b981;color:#fff}.btn-success:hover{background:#0ea472}
 .btn-outline{background:transparent;border:1px solid #d0d5dd;color:#555}.btn-outline:hover{background:#f5f5f5}
 .actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
@@ -48,19 +43,21 @@ td input.wide{width:90px}
 .status-ok{background:#d1fae5;color:#065f46}.status-err{background:#fee2e2;color:#991b1b}
 .format-tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-left:8px}
 .format-1{background:#e0e7ff;color:#3730a3}.format-2{background:#fce7f3;color:#9d174d}
+.th-copy{display:inline-block;margin-left:6px;padding:0 4px;font-size:10px;background:#dbeafe;border:none;border-radius:3px;cursor:pointer;color:#3730a3}
+.th-copy:hover{background:#4361ee;color:#fff}
 .hidden{display:none}
 </style>
 </head>
 <body>
 <div class="container">
-<h1>🎫 优惠券需求读取器 <span style="font-size:14px;color:#999;font-weight:400">v2 · 智能多格式</span></h1>
-<p class="subtitle">自动识别列式/键值对格式，关键词智能匹配字段 · End = Topup Start + Interval × Times</p>
+<h1>🎫 优惠券需求读取器 <span style="font-size:14px;color:#999;font-weight:400">v3</span></h1>
+<p class="subtitle">自动识别 3 种格式，关键词智能匹配字段</p>
 
-<div class="card" id="uploadCard">
+<div class="card">
 <div class="upload-area" id="dropZone">
 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
 <p>点击或拖拽上传 CSV 文件</p>
-<p class="hint">支持列式格式（工作簿1）和键值对格式（Budget Application）自动识别</p>
+<p class="hint">支持列式 / 键值对 / 列键值（Boombastrip）三种格式自动识别</p>
 </div>
 <input type="file" id="fileInput" accept=".csv,.txt" style="display:none">
 </div>
@@ -74,24 +71,10 @@ td input.wide{width:90px}
 </div>
 
 <div class="card">
-<div class="card-title">⚙️ Topup 配置（全局默认值，可逐券覆盖）</div>
-<div class="config-grid">
-<div class="config-item"><label>Topup Start Date</label><input type="text" id="cfgTopupStart" placeholder="e.g. 8/12/2026"></div>
-<div class="config-item"><label>Topup Interval (天)</label><input type="number" id="cfgTopupInterval" value="7" min="1"></div>
-<div class="config-item"><label>Topup Times (次)</label><input type="number" id="cfgTopupTimes" value="3" min="0"></div>
-<div class="config-item"><label>Topup Qty / 次 (默认)</label><input type="number" id="cfgTopupQty" value="0" min="0"></div>
-</div>
-<div class="actions">
-<button class="btn btn-primary" onclick="applyGlobalConfig()">应用到全部</button>
-<button class="btn btn-outline" onclick="autoCalcTopupStart()">自动计算 Topup Start (Start+7天)</button>
-</div>
-</div>
-
-<div class="card">
 <div class="card-title">📊 输出表格</div>
 <div class="actions" style="margin-bottom:12px">
-<button class="btn btn-success" onclick="exportXlsx()">📥 导出 XLSX</button>
-<button class="btn btn-outline" onclick="exportCsv()">📥 导出 CSV</button>
+<button class="btn btn-success" onclick="exportXlsx()"> 导出 XLSX</button>
+<button class="btn btn-outline" onclick="exportCsv()"> 导出 CSV</button>
 </div>
 <div class="table-wrap"><table id="outputTable"></table></div>
 </div>
@@ -100,7 +83,6 @@ td input.wide{width:90px}
 
 <script>
 let coupons = [];
-let globalConfig = { topupStart:'', topupInterval:7, topupTimes:3, topupQty:0 };
 
 // ========== CSV Parser ==========
 function parseCSV(text) {
@@ -110,17 +92,14 @@ function parseCSV(text) {
   while (i < text.length) {
     const c = text[i];
     if (inQuotes) {
-      if (c === '"') {
-        if (i+1 < text.length && text[i+1] === '"') { field += '"'; i += 2; }
-        else { inQuotes = false; i++; }
-      } else { field += c; i++; }
+      if (c === '"') { if (i+1 < text.length && text[i+1] === '"') { field += '"'; i += 2; } else { inQuotes = false; i++; } }
+      else { field += c; i++; }
     } else {
       if (c === '"') { inQuotes = true; i++; }
       else if (c === ',') { row.push(field); field = ''; i++; }
       else if (c === '\n' || c === '\r') {
         if (c === '\r' && i+1 < text.length && text[i+1] === '\n') i++;
-        row.push(field); field = '';
-        rows.push(row); row = []; i++;
+        row.push(field); field = ''; rows.push(row); row = []; i++;
       } else { field += c; i++; }
     }
   }
@@ -132,49 +111,45 @@ function parseCSV(text) {
 
 // ========== Keyword Field Matching ==========
 const FIELD_RULES = [
-  {key:'code', kw:['promo code name','coupon code','public code','code name','voucher code'], exact:['coupon id']},
+  {key:'code', kw:['promo code name','coupon code','public code','code name'], exact:['coupon id']},
   {key:'currency', kw:['currency'], exact:['currency']},
-  {key:'product', kw:['eligible product','product line','product type','product category'], exact:['products','product']},
+  {key:'product', kw:['eligible product','product line','product type'], exact:['products','product']},
   {key:'type', kw:['coupon type'], exact:['type']},
   {key:'budget', kw:['budget','cost center'], exact:['budget']},
   {key:'locale', kw:['locale','language'], exact:['locale']},
   {key:'device', kw:['device','platform'], exact:['devices']},
   {key:'aidsid', kw:['aidsid','aid sid','blacklist','block list'], exact:['blacklist']},
-  {key:'release', kw:['release date','start date','launch date','valid from','validity start'], exact:['release date']},
-  {key:'expire', kw:['expire date','expiry date','end date','valid to','validity end'], exact:['expire date']},
-  {key:'validity', kw:['validity period','validity','validity text'], exact:['validity']},
-  {key:'sku', kw:['eligible sku','product description','applicable','route'], exact:['products']},
-  {key:'payment', kw:['eligible payment','payment method','payment'], exact:[]},
-  {key:'quota', kw:['quota','initial qty','initial quantity','quantity per period'], exact:['quantity']},
-  {key:'mechanism', kw:['mechanism','discount rule','offer rule','discount rule'], exact:['value']},
-  {key:'newuser', kw:['new user','new customer','new buyer'], exact:[]},
+  {key:'release', kw:['release date','start date','launch date'], exact:['release date']},
+  {key:'expire', kw:['expire date','expiry date','end date'], exact:['expire date']},
+  {key:'validity', kw:['validity period','validity'], exact:['validity']},
+  {key:'sku', kw:['eligible sku','product description','applicable','route'], exact:[]},
+  {key:'payment', kw:['eligible payment','payment method'], exact:[]},
+  {key:'quota', kw:['quota','initial qty','initial quantity'], exact:['quantity']},
+  {key:'mechanism', kw:['mechanism','discount rule','offer rule'], exact:['value']},
+  {key:'newuser', kw:['new user','new customer'], exact:[]},
   {key:'peruid', kw:['per uid','usage limit','usage per','per account'], exact:['usage']},
-  {key:'channel', kw:['channel','whitelist','distribution'], exact:['channel']},
+  {key:'channel', kw:['channel','whitelist'], exact:['channel']},
   {key:'description', kw:['description','remark','note'], exact:['description']},
+  {key:'quantity', kw:['quantity','used limit','claim limit'], exact:['quantity']},
 ];
 
 function matchField(fieldName) {
   const lower = fieldName.toLowerCase().trim();
   if (!lower) return null;
-  // Exact match first
-  for (const rule of FIELD_RULES) {
-    if (rule.exact && rule.exact.some(e => lower === e)) return rule.key;
-  }
-  // Contains match
-  for (const rule of FIELD_RULES) {
-    if (rule.kw.some(k => lower.includes(k))) return rule.key;
-  }
+  for (const rule of FIELD_RULES) { if (rule.exact && rule.exact.some(e => lower === e)) return rule.key; }
+  for (const rule of FIELD_RULES) { if (rule.kw.some(k => lower.includes(k))) return rule.key; }
   return null;
 }
 
 // ========== Format Detection ==========
 function detectFormat(rows) {
-  // Check Format 1: header row with "Coupon ID" in multiple columns
   for (let i = 0; i < Math.min(rows.length, 10); i++) {
-    const couponIdCount = rows[i].filter(c => c.trim() === 'Coupon ID').length;
-    if (couponIdCount >= 2) return 'column';
+    if (rows[i].filter(c => c.trim() === 'Coupon ID').length >= 2) return 'column';
   }
-  // Check Format 2: key-value pairs in first two columns
+  for (let i = 0; i < Math.min(rows.length, 15); i++) {
+    const pcn = rows[i].filter(c => c.trim() === 'Promo Code Name').length;
+    if (pcn >= 2) return 'columnkv';
+  }
   let kvCount = 0;
   for (let i = 0; i < Math.min(rows.length, 30); i++) {
     const f = (rows[i][0] || '').trim();
@@ -184,207 +159,200 @@ function detectFormat(rows) {
   return null;
 }
 
+// ========== Number Parser ==========
+function parseNum(s) {
+  if (!s) return '';
+  s = s.trim();
+  if (/[Kk]$/.test(s)) return String(Math.round(parseFloat(s.replace(/[Kk]$/, '').replace(/[.,]/g, '')) * 1000));
+  if ((s.match(/\./g) || []).length > 1) return s.replace(/\./g, '');
+  if ((s.match(/,/g) || []).length > 1) return s.replace(/,/g, '');
+  return s.replace(/[.,]/g, '');
+}
+
 // ========== Value/Mechanism Parser ==========
 function parseValue(str) {
-  const r = {currency:'', discountDollar:'', minspendDollar:'', discountPct:'', capDollar:''};
+  const r = {currency: '', discountDollar: '', minspendDollar: '', discountPct: '', capDollar: ''};
   if (!str) return r;
-  // Currency symbol
-  const curM = str.match(/(S\$|RM|US\$|Rp|฿|₱|VNĐ|RM|\$)/i);
+  const curM = str.match(/(S\$|RM|US\$|Rp|\$)/i);
   if (curM) {
     const sym = curM[1].toUpperCase();
     if (sym === 'S$' || sym === '$') r.currency = 'SGD';
     else if (sym === 'RM') r.currency = 'MYR';
     else if (sym === 'US$') r.currency = 'USD';
-    else if (sym === 'RP' || sym === 'IDR') r.currency = 'IDR';
+    else if (sym === 'RP') r.currency = 'IDR';
     else r.currency = sym;
   }
-  // Fixed discount: "S$30 OFF min. spend S$400" or "RM30 min spend RM330"
-  const fixedM = str.match(/(?:S\$|RM|US\$|Rp|฿|\$)(\d+(?:\.\d+)?)\s*%?\s*OFF.*?(?:min\.?\s*spend|min\s+spend).*?(?:S\$|RM|US\$|Rp|฿|\$)(\d+(?:\.\d+)?)/i);
-  if (fixedM && !fixedM[0].includes('%')) {
-    r.discountDollar = fixedM[1];
-    r.minspendDollar = fixedM[2];
-    return r;
-  }
-  // Percentage: "Up to 30% OFF (capped to RM70)"
-  const pctM = str.match(/(\d+(?:\.\d+)?)\s*%\s*OFF.*?(?:capped\s*(?:to|at)\s*(?:S\$|RM|US\$|Rp|฿|\$)?\s*(\d+(?:\.\d+)?))?/i);
-  if (pctM) {
-    r.discountPct = pctM[1] + '%';
-    r.capDollar = pctM[2] || '';
-    return r;
-  }
-  // Simple fixed: "S$30 OFF S$400"
-  const simpleM = str.match(/(?:S\$|RM|US\$|\$)(\d+(?:\.\d+)?)\s*OFF\s*(?:S\$|RM|US\$|\$)(\d+(?:\.\d+)?)/i);
-  if (simpleM) { r.discountDollar = simpleM[1]; r.minspendDollar = simpleM[2]; return r; }
-  // Simple fixed without "OFF": "RM30 min spend RM330"
-  const simpleM2 = str.match(/(?:S\$|RM|US\$|\$)(\d+(?:\.\d+)?)\s*(?:min\.?\s*spend|min\s+spend)\s*(?:S\$|RM|US\$|\$)(\d+(?:\.\d+)?)/i);
-  if (simpleM2) { r.discountDollar = simpleM2[1]; r.minspendDollar = simpleM2[2]; return r; }
+  function clean(s) { return s ? parseNum(s.replace(/[,.]$/, '')) : ''; }
+  const C = '(?:S\\$|RM|US\\$|Rp|\\$)', N = '([\\d.,]+[Kk]?)';
+  // 1) Pct with OFF: "10% OFF (max Rp200.000)"
+  const pctM = str.match(new RegExp('(\\d+(?:\\.\\d+)?)\\s*%\\s*OFF\\s*\\(?[^)]*?(?:max|up\\s+to|capped)\\s+' + C + '?\\s*' + N, 'i'));
+  if (pctM) { r.discountPct = pctM[1] + '%'; r.capDollar = clean(pctM[2]); return r; }
+  // 2) Pct "up to": "7% up to Rp188K OFF min spend Rp600K"
+  const upToM = str.match(new RegExp('(\\d+(?:\\.\\d+)?)\\s*%\\s*up\\s+to\\s+' + C + '?\\s*' + N + '(?:\\s*OFF)?.*?(?:min\\.?\\s*spend|min\\s+spend)\\s*' + C + '?\\s*' + N, 'is'));
+  if (upToM) { r.discountPct = upToM[1] + '%'; r.capDollar = clean(upToM[2]); r.minspendDollar = clean(upToM[3]); return r; }
+  // 3) Fixed: "Rp188.000 OFF ... min spend Rp2,500,000"
+  const fixM = str.match(new RegExp(C + '\\s*' + N + '\\s*OFF.*?(?:min\\.?\\s*spend|min\\s+spend)\\s*' + C + '?\\s*' + N, 'is'));
+  if (fixM) { r.discountDollar = clean(fixM[1]); r.minspendDollar = clean(fixM[2]); return r; }
   return r;
 }
 
-// ========== Validity Text Parser ==========
+// ========== Validity Text Parser (Format 2) ==========
 function parseValidity(text) {
-  const r = {startDate:'', endDate:'', tagTime:'', topupQty:'', totalQty:''};
+  const r = {startDate: '', endDate: '', tagTime: '', topupQty: '', totalQty: '', _everyDay: ''};
   if (!text) return r;
-  // Normalize whitespace
   const t = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  // Date range: "12 Aug 12PM - 18 Oct EOD" or "08/01/2026 - 08/11/2026"
+  const months = {jan: '1', feb: '2', mar: '3', apr: '4', may: '5', jun: '6', jul: '7', aug: '8', sep: '9', oct: '10', nov: '11', dec: '12'};
+  // Date range: "12 Aug 12PM - 18 Oct EOD"
   const rangeM = t.match(/(\d{1,2})\s+([A-Za-z]{3,})\s*(\d{1,2}[:\s]*[APap]?[Mm]?)?\s*[-–]\s*(\d{1,2})\s+([A-Za-z]{3,})\s*(EOD|\d{1,2}[:\s]*[APap]?[Mm]?)?/i);
   if (rangeM) {
-    r.startDate = parseNaturalDate(rangeM[1], rangeM[2]);
-    r.endDate = parseNaturalDate(rangeM[4], rangeM[5]);
-    // Tag time from start
-    if (rangeM[3]) r.tagTime = normalizeTime(rangeM[3]);
-    else if (rangeM[6]) r.tagTime = normalizeTime(rangeM[6]);
+    const m1 = months[rangeM[2].toLowerCase().substring(0, 3)];
+    const m2 = months[rangeM[5].toLowerCase().substring(0, 3)];
+    r.startDate = m1 ? m1 + '/' + rangeM[1] + '/2026' : '';
+    r.endDate = m2 ? m2 + '/' + rangeM[4] + '/2026' : '';
+    if (rangeM[3]) r.tagTime = rangeM[3].replace(/\s+/g, '').toLowerCase().replace(':00', '');
   }
-  // Slash-format dates: "08/01/2026, 12:00PM"
-  if (!r.startDate) {
-    const slashM = t.match(/(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s*(\d{1,2}:\d{2}\s*[APap][Mm])?/);
-    if (slashM) {
-      r.startDate = `${parseInt(slashM[1])}/${parseInt(slashM[2])}/${slashM[3]}`;
-      if (slashM[4]) r.tagTime = normalizeTime(slashM[4]);
-    }
-  }
-  // Drop time: "Drop at 12PM"
-  const dropM = t.match(/[Dd]rop\s*(?:at)?\s*(\d{1,2}[:\s]*[APap]?[Mm]?)/i);
-  if (dropM) r.tagTime = normalizeTime(dropM[1]);
-  // Topup qty: "Each time topup: 15 qty"
-  const topupM = t.match(/(?:top\s*up|topup)\s*[:\s]*(\d+)\s*(?:qty|quantity|pcs)?/i);
+  // Drop time
+  const dropM = t.match(/[Dd]rop\s*(?:at)?\s*(\d{1,2}[:\s]*[APap]?[Mm]?)/);
+  if (dropM) r.tagTime = dropM[1].replace(/\s+/g, '').toLowerCase().replace(':00', '');
+  // Topup qty
+  const topupM = t.match(/(?:top\s*up|topup)\s*[:\s]*(\d+)\s*(?:qty|quantity)?/i);
   if (topupM) r.topupQty = topupM[1];
-  // Total qty: "Total qty: 150"
-  const totalM = t.match(/(?:total|total\s*qty|total\s*quantity)\s*[:\s]*(\d+)/i);
+  // Total qty
+  const totalM = t.match(/(?:total|total\s*qty)\s*[:\s]*(\d+)/i);
   if (totalM) r.totalQty = totalM[1];
-  // Interval from "every Wednesday/Monday/etc"
+  // Every day
   const everyM = t.match(/every\s+(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)/i);
   if (everyM) r._everyDay = everyM[1];
   return r;
 }
 
-function parseNaturalDate(day, monthStr) {
-  const months = {jan:'1',feb:'2',mar:'3',apr:'4',may:'5',jun:'6',jul:'7',aug:'8',sep:'9',oct:'10',nov:'11',dec:'12'};
-  const mon = months[monthStr.toLowerCase().substring(0,3)] || '';
-  if (!mon) return '';
-  return `${parseInt(mon)}/${parseInt(day)}/2026`;
+// ========== Date Range Parser (Format 3: "5-8 August") ==========
+function parseRangeDate(str) {
+  if (!str) return {startDate: '', endDate: '', tagTime: ''};
+  const months = {jan: '1', feb: '2', mar: '3', apr: '4', may: '5', jun: '6', jul: '7', aug: '8', sep: '9', oct: '10', nov: '11', dec: '12'};
+  let m;
+  m = str.match(/(\d{1,2})\s*[-–]\s*(\d{1,2})\s+([A-Za-z]{3,})/);
+  if (m) {
+    const mon = months[m[3].toLowerCase().substring(0, 3)] || '';
+    if (mon) return {startDate: mon + '/' + m[1] + '/2026', endDate: mon + '/' + m[2] + '/2026', tagTime: ''};
+  }
+  m = str.match(/(\d{1,2})\s+([A-Za-z]{3,})\s*,?\s*(\d{1,2}\s*[APap]?[Mm]?)/);
+  if (m) {
+    const mon = months[m[2].toLowerCase().substring(0, 3)] || '';
+    if (mon) return {
+      startDate: mon + '/' + m[1] + '/2026',
+      endDate: mon + '/' + m[1] + '/2026',
+      tagTime: m[3] ? m[3].replace(/\s+/g, '').toLowerCase().replace(':00', '') : ''
+    };
+  }
+  return {startDate: '', endDate: '', tagTime: ''};
 }
 
-function normalizeTime(str) {
-  if (!str) return '';
-  return str.replace(/\s+/g,'').toLowerCase().replace(':00','');
+// ========== Quantity Parser (Format 3) ==========
+function parseQuantityText(str) {
+  if (!str) return {total: 0, initialQty: 0, topupStart: '', topupTimes: 0, topupQty: 0};
+  const dateEntries = [];
+  const entryRegex = /(\d{1,2})\s+([A-Za-z]{3,})\s*[=:]\s*(\d+)/gi;
+  let m;
+  while ((m = entryRegex.exec(str)) !== null) {
+    dateEntries.push({day: parseInt(m[1]), month: m[2], qty: parseInt(m[3])});
+  }
+  if (dateEntries.length > 0) {
+    const months = {jan: '1', feb: '2', mar: '3', apr: '4', may: '5', jun: '6', jul: '7', aug: '8', sep: '9', oct: '10', nov: '11', dec: '12'};
+    const initialQty = dateEntries[0].qty;
+    const total = dateEntries.reduce(function(s, d) { return s + d.qty; }, 0);
+    const topupTimes = Math.max(0, dateEntries.length - 1);
+    let topupStart = '', topupQty = 0;
+    if (dateEntries.length > 1) {
+      const td = dateEntries[1];
+      const mon = months[td.month.toLowerCase().substring(0, 3)] || '';
+      if (mon) topupStart = mon + '/' + td.day + '/2026';
+      topupQty = td.qty;
+    }
+    // End date = last date in breakdown
+    const lastD = dateEntries[dateEntries.length - 1];
+    const lastMon = months[lastD.month.toLowerCase().substring(0,3)] || '';
+    const endDate = lastMon ? lastMon + '/' + lastD.day + '/2026' : '';
+    return {total: total, initialQty: initialQty, topupStart: topupStart, topupTimes: topupTimes, topupQty: topupQty, endDate: endDate};
+  }
+  const n = parseInt(str);
+  const val = isNaN(n) ? 0 : n;
+  return {total: val, initialQty: val, topupStart: '', topupTimes: 0, topupQty: 0, endDate: ''};
+}
+
+// ========== Date Math ==========
+function parseDateMDY(str) {
+  const m = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (!m) return null;
+  return new Date(+m[3], +m[1] - 1, +m[2]);
+}
+function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
+function fmtDate(d) { return (d.getMonth() + 1) + '/' + d.getDate() + '/' + d.getFullYear(); }
+function calcEndDate(ts, interval, times) {
+  const s = parseDateMDY(ts);
+  if (!s) return '';
+  return fmtDate(addDays(s, interval * times));
+}
+
+// ========== Auto-calculate topupTimes from dates ==========
+function autoCalcTopupTimes() {
+  coupons.forEach(function(c) {
+    if (c._autoInterval) {
+      const dayMap = {sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6};
+      if (dayMap[c._autoInterval.toLowerCase()] !== undefined) c.topupInterval = 7;
+    }
+    const s = parseDateMDY(c.startDate || c.topupDateStart);
+    const e = parseDateMDY(c._expireDate);
+    if (s && e && c.topupInterval > 0) {
+      const diff = Math.round((e - s) / (1000 * 60 * 60 * 24));
+      c.topupTimes = Math.floor(diff / c.topupInterval);
+    }
+  });
 }
 
 // ========== Format 1: Column-based Extractor ==========
 function extractColumnFormat(rows) {
   let hri = -1;
   for (let i = 0; i < Math.min(rows.length, 10); i++) {
-    if (rows[i].some(c => c.trim() === 'Coupon ID')) { hri = i; break; }
+    if (rows[i].some(function(c) { return c.trim() === 'Coupon ID'; })) { hri = i; break; }
   }
   if (hri < 0) throw new Error('Format 1: 未找到 Coupon ID 表头');
   const hr = rows[hri];
-  const startDate = parseCouponDateStr(hr[0].trim());
+  const months = {jan: '1', feb: '2', mar: '3', apr: '4', may: '5', jun: '6', jul: '7', aug: '8', sep: '9', oct: '10', nov: '11', dec: '12'};
+  const dateM = hr[0].trim().match(/(\d{1,2})[-\s]([a-zA-Z]{3})/);
+  const startDate = dateM ? (months[dateM[2].toLowerCase().substring(0, 3)] || '') + '/' + dateM[1] + '/2026' : hr[0].trim();
+
   const groups = [];
   for (let i = 1; i < hr.length; i++) {
-    if (hr[i].trim() === 'Coupon ID' && i+1 < hr.length) groups.push({fc:i, vc:i+1});
+    if (hr[i].trim() === 'Coupon ID' && i + 1 < hr.length) groups.push({fc: i, vc: i + 1});
   }
   if (!groups.length) throw new Error('Format 1: 未找到数据列');
 
-  return groups.map(g => {
+  return groups.map(function(g) {
     const fields = {};
     for (let r = hri + 1; r < rows.length; r++) {
       const fn = (rows[r][g.fc] || '').trim();
       const key = matchField(fn);
       if (key) fields[key] = (rows[r][g.vc] || '').trim();
     }
-    return buildCoupon(fields, startDate);
-  }).filter(c => c && c.code);
+    return buildCouponFromFields(fields, startDate);
+  }).filter(function(c) { return c && c.code; });
 }
 
-function parseCouponDateStr(str) {
-  const months = {jan:'1',feb:'2',mar:'3',apr:'4',may:'5',jun:'6',jul:'7',aug:'8',sep:'9',oct:'10',nov:'11',dec:'12'};
-  const m = str.match(/(\d{1,2})[-\s]([a-zA-Z]{3})/);
-  if (!m) return str;
-  const mon = months[m[2].toLowerCase().substring(0,3)] || '';
-  return mon ? `${mon}/${m[1]}/2026` : str;
-}
-
-// ========== Format 2: Key-Value Extractor ==========
-function extractKeyValueFormat(rows) {
-  const couponBlocks = [];
-  let currentBlock = {};
-  let currentProductHint = '';
-  let descLine = '';
-
-  for (let i = 0; i < rows.length; i++) {
-    const col0 = (rows[i][0] || '').trim();
-    const col1 = (rows[i][1] || '').trim();
-
-    if (!col0 && !col1) {
-      // Empty row = block separator
-      if (Object.keys(currentBlock).length >= 3) {
-        currentBlock._productHint = currentProductHint;
-        currentBlock._desc = descLine;
-        couponBlocks.push(currentBlock);
-        currentBlock = {};
-      }
-      continue;
-    }
-
-    // Detect section headers (e.g., "Flights", "Hotels")
-    if (!col1 && /^(flights?|hotels?|hotel|flight)/i.test(col0)) {
-      currentProductHint = col0;
-      continue;
-    }
-    // Skip description lines (e.g., "S$30 OFF S$400 on...")
-    if (!col1 && !matchField(col0)) {
-      descLine = col0;
-      continue;
-    }
-    // Skip "Coupon Drop" lines
-    if (/coupon\s*drop/i.test(col0) && !col1) continue;
-
-    // Key-value pair
-    const fieldKey = matchField(col0);
-    if (fieldKey && col1) {
-      // For 'sku'/'product': if already have product type, map to sku
-      if (fieldKey === 'product' && currentBlock.product) {
-        currentBlock.sku = col1;
-      } else if (fieldKey === 'product') {
-        // Detect H/F from product text
-        const pl = col1.toLowerCase();
-        if (pl.includes('flight')) currentBlock.product = 'FLIGHT';
-        else if (pl.includes('hotel')) currentBlock.product = 'HOTEL';
-        currentBlock.sku = col1; // Also use as SKU
-      } else if (fieldKey === 'sku') {
-        currentBlock.sku = col1;
-      } else {
-        currentBlock[fieldKey] = col1;
-      }
-    }
-  }
-  // Last block
-  if (Object.keys(currentBlock).length >= 3) {
-    currentBlock._productHint = currentProductHint;
-    currentBlock._desc = descLine;
-    couponBlocks.push(currentBlock);
-  }
-
-  return couponBlocks.map(b => buildCouponFromKV(b)).filter(c => c && c.code);
-}
-
-// ========== Build Coupon Objects ==========
-function buildCoupon(fields, startDate) {
-  const val = parseValue(fields.mechanism || fields.description || '');
-  const rp = fields.release ? parseDateTimeStr(fields.release) : {date:'',time:''};
+function buildCouponFromFields(fields, startDate) {
+  const val = parseValue(fields.mechanism || '');
+  const rp = fields.release ? parseDateTimeStr(fields.release) : {date: '', time: ''};
   const v = fields.validity ? parseValidity(fields.validity) : {};
   const pl = (fields.product || '').toLowerCase();
-  const product = fields.product ? (pl.includes('flight') ? 'F' : 'H') : '';
+  const product = fields.product ? (pl.includes('flight') ? 'FLIGHT' : 'HOTEL') : '';
   const ccM = (fields.budget || '').match(/\((\d+)\)|(\d{3,})/);
-  const costCenter = ccM ? (ccM[1] || ccM[2]) : '';
 
   return {
     code: fields.code || '',
     currency: fields.currency || val.currency || '',
-    product,
+    product: product,
     startDate: startDate || v.startDate || rp.date || '',
-    costCenter,
+    costCenter: ccM ? (ccM[1] || ccM[2]) : '',
     tag: v.tagTime || rp.time || '',
     sku: fields.sku || fields.product || '',
     usagePerAccount: fields.peruid || '',
@@ -401,7 +369,6 @@ function buildCoupon(fields, startDate) {
     topupInterval: 7,
     topupQty: parseInt(v.topupQty) || 0,
     topupTimes: 0,
-    _autoInterval: v._everyDay || null,
     _releaseDate: fields.release || '',
     _expireDate: fields.expire || v.endDate || '',
     _mechanism: fields.mechanism || '',
@@ -411,150 +378,264 @@ function buildCoupon(fields, startDate) {
     _totalQty: parseInt(v.totalQty) || 0,
     _channel: fields.channel || '',
     _description: fields.description || '',
-  };
-}
-
-function buildCouponFromKV(fields) {
-  const val = parseValue(fields.mechanism || '');
-  const v = fields.validity ? parseValidity(fields.validity) : {};
-
-  // Product from hint or field
-  let product = fields.product || '';
-  if (!product && fields._productHint) {
-    const h = fields._productHint.toLowerCase();
-    product = h.includes('flight') ? 'FLIGHT' : (h.includes('hotel') ? 'HOTEL' : '');
-  } else if (typeof product === 'string') {
-    const pl = product.toLowerCase();
-    product = pl.includes('flight') ? 'FLIGHT' : (pl.includes('hotel') ? 'HOTEL' : '');
-  }
-
-  const ccM = (fields.budget || '').match(/(\d{3,})/);
-  const costCenter = ccM ? ccM[1] : '';
-
-  // Determine dates
-  const startDate = v.startDate || '';
-  const endDate = v.endDate || '';
-
-  // Topup
-  const topupQty = parseInt(v.topupQty) || 0;
-  const totalQty = parseInt(v.totalQty) || parseInt(fields.quota) || 0;
-  const initialQty = topupQty || parseInt(fields.quota) || totalQty;
-
-  return {
-    code: fields.code || '',
-    currency: val.currency || '',
-    product: product || '',
-    startDate,
-    costCenter,
-    tag: v.tagTime || '',
-    sku: fields.sku || fields._desc || '',
-    usagePerAccount: fields.peruid || '',
-    paymentLimit: '',
-    deviceLimit: fields.device || '',
-    newUserOnly: '',
-    travelDateLimit: '',
-    discountDollar: val.discountDollar,
-    minspendDollar: val.minspendDollar,
-    discountPct: val.discountPct,
-    capDollar: val.capDollar,
-    initialQty,
-    topupDateStart: startDate,
-    topupInterval: 7,
-    topupQty,
-    topupTimes: 0,
     _autoInterval: v._everyDay || null,
-    _releaseDate: startDate,
-    _expireDate: endDate,
-    _mechanism: fields.mechanism || '',
-    _locale: '',
-    _aidsid: fields.aidsid || '',
-    _validity: fields.validity || '',
-    _totalQty: totalQty,
-    _channel: fields.channel || '',
-    _description: fields.description || '',
   };
 }
 
 function parseDateTimeStr(str) {
   const m = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s*(\d{1,2}:\d{2}\s*[APap][Mm])?/);
-  if (!m) return {date:str,time:''};
-  return {date:`${parseInt(m[1])}/${parseInt(m[2])}/${m[3]}`, time:m[4]?normalizeTime(m[4]):''};
+  if (!m) return {date: str, time: ''};
+  return {date: parseInt(m[1]) + '/' + parseInt(m[2]) + '/' + m[3], time: m[4] ? m[4].replace(/\s/g, '').toLowerCase().replace(':00', '') : ''};
 }
 
-// ========== Date Math ==========
-function parseDateMDY(str) {
-  const m = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (!m) return null;
-  return new Date(+m[3], +m[1]-1, +m[2]);
-}
-function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate()+n); return r; }
-function fmtDate(d) { return `${d.getMonth()+1}/${d.getDate()}/${d.getFullYear()}`; }
-function calcEndDate(ts, interval, times) {
-  const s = parseDateMDY(ts);
-  if (!s) return '';
-  return fmtDate(addDays(s, interval * times));
-}
+// ========== Format 2: Key-Value Extractor ==========
+function extractKeyValueFormat(rows) {
+  const couponBlocks = [];
+  let currentBlock = {};
+  let productHint = '', desc = '';
 
-
-// ========== Auto-calculate topupTimes ==========
-function autoCalcTopupTimes() {
-  const dayMap = {sunday:0,monday:1,tuesday:2,wednesday:3,thursday:4,friday:5,saturday:6};
-  coupons.forEach(c => {
-    if (c._autoInterval) {
-      const dayNum = dayMap[c._autoInterval.toLowerCase()];
-      if (dayNum !== undefined) c.topupInterval = 7; // weekly
+  for (let i = 0; i < rows.length; i++) {
+    const c0 = (rows[i][0] || '').trim(), c1 = (rows[i][1] || '').trim();
+    if (!c0 && !c1) {
+      if (Object.keys(currentBlock).length >= 3) { currentBlock._hint = productHint; currentBlock._desc = desc; couponBlocks.push(currentBlock); }
+      currentBlock = {};
+      continue;
     }
-    const s = parseDateMDY(c.startDate || c.topupDateStart);
-    const e = parseDateMDY(c._expireDate);
-    if (s && e && c.topupInterval > 0) {
-      const diff = Math.round((e - s) / (1000*60*60*24));
-      c.topupTimes = Math.floor(diff / c.topupInterval);
+    if (!c1 && /^(flights?|hotels?)/i.test(c0)) { productHint = c0; continue; }
+    if (!c1 && !matchField(c0)) { desc = c0; continue; }
+    if (/coupon\s*drop/i.test(c0) && !c1) continue;
+    const key = matchField(c0);
+    if (key && c1) {
+      if (key === 'product') {
+        const pl = c1.toLowerCase();
+        currentBlock.product = pl.includes('flight') ? 'FLIGHT' : (pl.includes('hotel') ? 'HOTEL' : '');
+        currentBlock.sku = c1;
+      } else { currentBlock[key] = c1; }
     }
-  });
+  }
+  if (Object.keys(currentBlock).length >= 3) { currentBlock._hint = productHint; currentBlock._desc = desc; couponBlocks.push(currentBlock); }
+
+  return couponBlocks.map(function(b) {
+    const val = parseValue(b.mechanism || '');
+    const v = b.validity ? parseValidity(b.validity) : {};
+    let product = b.product || '';
+    if (!product && b._hint) {
+      const h = b._hint.toLowerCase();
+      product = h.includes('flight') ? 'FLIGHT' : (h.includes('hotel') ? 'HOTEL' : '');
+    }
+    const ccM = (b.budget || '').match(/(\d{3,})/);
+    const topupQty = parseInt(v.topupQty) || 0;
+    const totalQty = parseInt(v.totalQty) || parseInt(b.quota) || 0;
+    const initialQty = topupQty || parseInt(b.quota) || totalQty;
+
+    return {
+      code: b.code || '',
+      currency: val.currency || '',
+      product: product,
+      startDate: v.startDate || '',
+      costCenter: ccM ? ccM[1] : '',
+      tag: v.tagTime || '',
+      sku: b.sku || b._desc || '',
+      usagePerAccount: b.peruid || '',
+      paymentLimit: '',
+      deviceLimit: b.device || '',
+      newUserOnly: '',
+      travelDateLimit: '',
+      discountDollar: val.discountDollar,
+      minspendDollar: val.minspendDollar,
+      discountPct: val.discountPct,
+      capDollar: val.capDollar,
+      initialQty: initialQty,
+      topupDateStart: v.startDate || '',
+      topupInterval: 7,
+      topupQty: topupQty,
+      topupTimes: 0,
+      _releaseDate: v.startDate || '',
+      _expireDate: v.endDate || '',
+      _mechanism: b.mechanism || '',
+      _locale: '',
+      _aidsid: b.aidsid || '',
+      _validity: b.validity || '',
+      _totalQty: totalQty,
+      _channel: b.channel || '',
+      _description: b.description || '',
+      _autoInterval: v._everyDay || null,
+    };
+  }).filter(function(c) { return c && c.code; });
+}
+
+// ========== Format 3: Column Key-Value Extractor ==========
+function extractColumnKVFormat(rows) {
+  const allCoupons = [];
+
+  // Pre-scan: find ALL section header rows
+  const headerRows = new Set();
+  for (let ri = 0; ri < rows.length; ri++) {
+    let pcnCount = 0;
+    for (let j = 0; j < rows[ri].length; j++) {
+      if (rows[ri][j].trim() === 'Promo Code Name') pcnCount++;
+    }
+    if (pcnCount >= 2) headerRows.add(ri);
+  }
+
+  for (let ri = 0; ri < rows.length; ri++) {
+    const pcnCols = [];
+    for (let j = 0; j < rows[ri].length; j++) {
+      if (rows[ri][j].trim() === 'Promo Code Name') pcnCols.push(j);
+    }
+    if (pcnCols.length < 2) continue;
+
+    const step = pcnCols[1] - pcnCols[0];
+    const groups = pcnCols.map(function(fc) { return {fc: fc, vc: fc + 1}; });
+
+    // Date context
+    const dateContexts = groups.map(function(g) {
+      for (let dr = ri - 1; dr >= Math.max(0, ri - 4); dr--) {
+        const dv = (rows[dr][g.fc] || '').trim();
+        if (dv && /\d/.test(dv) && !matchField(dv)) return dv;
+      }
+      return '';
+    });
+
+    // Section product type
+    let sectionProduct = '';
+    for (let dr = ri - 1; dr >= Math.max(0, ri - 5); dr--) {
+      const title = (rows[dr][0] || '').trim();
+      if (/^FLIGHT/i.test(title)) { sectionProduct = 'FLIGHT'; break; }
+      if (/^HOTEL/i.test(title)) { sectionProduct = 'HOTEL'; break; }
+    }
+
+    for (let gi = 0; gi < groups.length; gi++) {
+      const g = groups[gi];
+      const fields = {};
+      let qtyRaw = '';
+
+      // Code from header
+      fields.code = (rows[ri][g.vc] || '').trim();
+
+      for (let r = ri + 1; r < rows.length; r++) {
+        if (headerRows.has(r) && r !== ri) break;
+        const fieldName = (rows[r][g.fc] || '').trim();
+        if (!fieldName) {
+          const contVal = (rows[r][g.vc] || '').trim();
+          if (contVal && qtyRaw) qtyRaw += ' ' + contVal;
+          continue;
+        }
+        const fieldKey = matchField(fieldName);
+        if (!fieldKey) continue;
+
+        const value = (rows[r][g.vc] || '').trim();
+
+        if (fieldKey === 'quantity' || fieldKey === 'quota') {
+          qtyRaw = value;
+          for (let r2 = r + 1; r2 < rows.length; r2++) {
+            if (headerRows.has(r2)) break;
+            const nextField = (rows[r2][g.fc] || '').trim();
+            if (nextField && matchField(nextField)) break;
+            const nextVal = (rows[r2][g.vc] || '').trim();
+            if (nextVal) qtyRaw += ' ' + nextVal;
+            else if (!nextField) continue;
+            else break;
+          }
+          fields.quantity = qtyRaw;
+        } else {
+          fields[fieldKey] = value;
+        }
+
+        if (fieldKey === 'product') {
+          fields.sku = value;
+          const pl = value.toLowerCase();
+          if (pl.includes('flight')) fields._productType = 'FLIGHT';
+          else if (pl.includes('hotel')) fields._productType = 'HOTEL';
+          else fields._productType = sectionProduct;
+        }
+      }
+
+      if (!fields.code) continue;
+      if (!fields._productType) fields._productType = sectionProduct;
+
+      const dateCtx = dateContexts[gi] || '';
+      const vDate = parseRangeDate(fields.validity || dateCtx);
+      const qtyInfo = parseQuantityText(fields.quantity || '');
+      const val = parseValue(fields.mechanism || '');
+      const ccM = (fields.budget || '').match(/(\d{3,})/);
+
+      allCoupons.push({
+        code: fields.code,
+        currency: val.currency || '',
+        product: fields._productType || '',
+        startDate: vDate.startDate || '',
+        costCenter: ccM ? ccM[1] : '',
+        tag: vDate.tagTime || '',
+        sku: fields.sku || '',
+        usagePerAccount: fields.peruid || '',
+        paymentLimit: '',
+        deviceLimit: fields.device || '',
+        newUserOnly: '',
+        travelDateLimit: '',
+        discountDollar: val.discountDollar,
+        minspendDollar: val.minspendDollar,
+        discountPct: val.discountPct,
+        capDollar: val.capDollar,
+        initialQty: qtyInfo.initialQty,
+        topupDateStart: qtyInfo.topupStart || vDate.startDate || '',
+        topupInterval: 1,
+        topupQty: qtyInfo.topupQty || 0,
+        topupTimes: qtyInfo.topupTimes || 0,
+        _releaseDate: vDate.startDate || '',
+        _expireDate: qtyInfo.endDate || vDate.endDate || '',
+        _mechanism: fields.mechanism || '',
+        _locale: '',
+        _aidsid: fields.aidsid || '',
+        _validity: fields.validity || dateCtx,
+        _totalQty: qtyInfo.total,
+        _channel: fields.channel || '',
+        _description: fields.description || '',
+        _autoInterval: null,
+      });
+    }
+  }
+  return allCoupons;
 }
 
 // ========== UI ==========
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
 const statusBox = document.getElementById('statusBox');
-dropZone.addEventListener('click', () => fileInput.click());
-dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('dragover'); if(e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]); });
-fileInput.addEventListener('change', e => { if(e.target.files.length) handleFile(e.target.files[0]); });
+dropZone.addEventListener('click', function() { fileInput.click(); });
+dropZone.addEventListener('dragover', function(e) { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', function() { dropZone.classList.remove('dragover'); });
+dropZone.addEventListener('drop', function(e) { e.preventDefault(); dropZone.classList.remove('dragover'); if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]); });
+fileInput.addEventListener('change', function(e) { if (e.target.files.length) handleFile(e.target.files[0]); });
 
-function showStatus(msg, type) { statusBox.className = `status show status-${type}`; statusBox.textContent = msg; }
+function showStatus(msg, type) { statusBox.className = 'status show status-' + type; statusBox.textContent = msg; }
 
 function handleFile(file) {
   const reader = new FileReader();
-  reader.onload = e => {
+  reader.onload = function(e) {
     try {
       const rows = parseCSV(e.target.result);
       const format = detectFormat(rows);
-      if (!format) throw new Error('无法识别 CSV 格式。请确保包含 "Coupon ID" 表头（列式）或 "Budget/Promo Code Name" 等字段名（键值对）');
+      if (!format) throw new Error('无法识别 CSV 格式');
 
-      if (format === 'column') {
-        coupons = extractColumnFormat(rows);
-      } else {
-        coupons = extractKeyValueFormat(rows);
-      }
+      if (format === 'column') coupons = extractColumnFormat(rows);
+      else if (format === 'columnkv') coupons = extractColumnKVFormat(rows);
+      else coupons = extractKeyValueFormat(rows);
+
       if (!coupons.length) throw new Error('未解析到任何优惠券');
 
-      const fmtLabel = format === 'column' ? '列式格式 (Format 1)' : '键值对格式 (Format 2)';
-      const fmtClass = format === 'column' ? 'format-1' : 'format-2';
-      document.getElementById('formatTag').className = `format-tag ${fmtClass}`;
+      autoCalcTopupTimes();
+
+      const fmtLabel = format === 'column' ? '列式 (Format 1)' : format === 'columnkv' ? '列键值 (Format 3)' : '键值对 (Format 2)';
+      const fmtClass = format === 'keyvalue' ? 'format-2' : 'format-1';
+      document.getElementById('formatTag').className = 'format-tag ' + fmtClass;
       document.getElementById('formatTag').textContent = fmtLabel;
 
-      showStatus(`✅ 识别为 ${fmtLabel}，成功解析 ${coupons.length} 个优惠券: ${coupons.map(c=>c.code).join(', ')}`, 'ok');
-
-      // Apply defaults
-      applyGlobalConfig();
-      autoCalcTopupTimes();
+      showStatus('✅ 解析 ' + coupons.length + ' 个优惠券: ' + coupons.map(function(c) { return c.code; }).join(', '), 'ok');
       renderAll();
       document.getElementById('parsedSection').classList.remove('hidden');
-    } catch(err) {
+    } catch (err) {
       showStatus('❌ ' + err.message, 'err');
-      console.error(err);
     }
   };
   reader.readAsText(file, 'UTF-8');
@@ -563,62 +644,68 @@ function handleFile(file) {
 function renderAll() { renderCouponCards(); renderOutputTable(); }
 
 function renderCouponCards() {
-  document.getElementById('couponCards').innerHTML = coupons.map(c => `
-    <div class="coupon-card">
-      <div class="code">${esc(c.code)} <span class="badge ${c.product==='HOTEL'?'badge-h':'badge-f'}">${c.product==='HOTEL'?'Hotel':c.product==='FLIGHT'?'Flight':c.product||'?'}</span></div>
-      <div class="fr"><span class="l">Currency</span><span class="v">${esc(c.currency)}</span></div>
-      <div class="fr"><span class="l">SKU</span><span class="v">${esc(c.sku)}</span></div>
-      <div class="fr"><span class="l">Mechanism</span><span class="v">${esc(c._mechanism)}</span></div>
-      <div class="fr"><span class="l">Discount</span><span class="v">${c.discountDollar?'$'+c.discountDollar:''}${c.discountPct||''}</span></div>
-      <div class="fr"><span class="l">Min Spend</span><span class="v">${c.minspendDollar?'$'+c.minspendDollar:''}</span></div>
-      <div class="fr"><span class="l">Cap</span><span class="v">${c.capDollar?'$'+c.capDollar:''}</span></div>
-      <div class="fr"><span class="l">Initial Qty</span><span class="v">${c.initialQty}</span></div>
-      <div class="fr"><span class="l">Device</span><span class="v">${esc(c.deviceLimit)}</span></div>
-      <div class="fr"><span class="l">Blacklist</span><span class="v">${esc(c._aidsid)}</span></div>
-      <div class="fr"><span class="l">Validity</span><span class="v">${esc(c._validity||c._releaseDate)}</span></div>
-      ${c._channel?`<div class="fr"><span class="l">Channel</span><span class="v">${esc(c._channel)}</span></div>`:''}
-    </div>
-  `).join('');
+  document.getElementById('couponCards').innerHTML = coupons.map(function(c) {
+    return '<div class="coupon-card">' +
+      '<div class="code">' + esc(c.code) + ' <span class="badge ' + (c.product === 'HOTEL' ? 'badge-h' : 'badge-f') + '">' + (c.product === 'HOTEL' ? 'Hotel' : c.product === 'FLIGHT' ? 'Flight' : c.product || '?') + '</span></div>' +
+      '<div class="fr"><span class="l">Currency</span><span class="v">' + esc(c.currency) + '</span></div>' +
+      '<div class="fr"><span class="l">SKU</span><span class="v">' + esc(c.sku) + '</span></div>' +
+      '<div class="fr"><span class="l">Mechanism</span><span class="v">' + esc(c._mechanism) + '</span></div>' +
+      '<div class="fr"><span class="l">Discount</span><span class="v">' + (c.discountDollar ? '$' + c.discountDollar : '') + (c.discountPct || '') + '</span></div>' +
+      '<div class="fr"><span class="l">Min Spend</span><span class="v">' + (c.minspendDollar ? '$' + c.minspendDollar : '') + '</span></div>' +
+      '<div class="fr"><span class="l">Cap</span><span class="v">' + (c.capDollar ? '$' + c.capDollar : '') + '</span></div>' +
+      '<div class="fr"><span class="l">Initial Qty</span><span class="v">' + c.initialQty + '</span></div>' +
+      '<div class="fr"><span class="l">Device</span><span class="v">' + esc(c.deviceLimit) + '</span></div>' +
+      '<div class="fr"><span class="l">Blacklist</span><span class="v">' + esc(c._aidsid) + '</span></div>' +
+      '<div class="fr"><span class="l">Validity</span><span class="v">' + esc(c._validity || c._releaseDate) + '</span></div>' +
+      (c._channel ? '<div class="fr"><span class="l">Channel</span><span class="v">' + esc(c._channel) + '</span></div>' : '') +
+    '</div>';
+  }).join('');
 }
 
 const OUT_COLS = [
-  {key:'code',label:'Code',edit:false},
-  {key:'currency',label:'Curr.',edit:false},
-  {key:'product',label:'Product',edit:false},
-  {key:'startDate',label:'Start',edit:false},
-  {key:'_endDate',label:'End',edit:false},
-  {key:'costCenter',label:'Cost Center',edit:false},
-  {key:'tag',label:'Tag',edit:true,type:'text'},
-  {key:'sku',label:'sku',edit:true,type:'text',wide:true},
-  {key:'usagePerAccount',label:'Usage/acct',edit:true,type:'text',wide:true},
-  {key:'paymentLimit',label:'pay limit',edit:true,type:'text'},
-  {key:'deviceLimit',label:'Device',edit:true,type:'text'},
-  {key:'newUserOnly',label:'New user',edit:true,type:'text'},
-  {key:'travelDateLimit',label:'Travel date',edit:true,type:'text'},
-  {key:'discountDollar',label:'Discount$',edit:true,type:'text'},
-  {key:'minspendDollar',label:'Minspend$',edit:true,type:'text'},
-  {key:'discountPct',label:'Discount%',edit:true,type:'text'},
-  {key:'capDollar',label:'Cap$',edit:true,type:'text'},
-  {key:'initialQty',label:'Init qty',edit:true,type:'number'},
-  {key:'topupDateStart',label:'Topup start',edit:true,type:'text',wide:true},
-  {key:'topupInterval',label:'Interval',edit:true,type:'number'},
-  {key:'topupQty',label:'Topup qty',edit:true,type:'number'},
-  {key:'topupTimes',label:'Times',edit:true,type:'number'},
+  {key: 'code', label: 'Code', edit: false},
+  {key: 'currency', label: 'Curr.', edit: false},
+  {key: 'product', label: 'Product', edit: false},
+  {key: 'startDate', label: 'Start', edit: false},
+  {key: '_endDate', label: 'End', edit: false},
+  {key: 'costCenter', label: 'Cost Center', edit: false},
+  {key: 'tag', label: 'Tag', edit: true, type: 'text'},
+  {key: 'sku', label: 'sku', edit: true, type: 'text', wide: true},
+  {key: 'usagePerAccount', label: 'Usage/acct', edit: true, type: 'text', wide: true},
+  {key: 'paymentLimit', label: 'pay limit', edit: true, type: 'text'},
+  {key: 'deviceLimit', label: 'Device', edit: true, type: 'text'},
+  {key: 'newUserOnly', label: 'New user', edit: true, type: 'text'},
+  {key: 'travelDateLimit', label: 'Travel date', edit: true, type: 'text'},
+  {key: 'discountDollar', label: 'Discount$', edit: true, type: 'text'},
+  {key: 'minspendDollar', label: 'Minspend$', edit: true, type: 'text'},
+  {key: 'discountPct', label: 'Discount%', edit: true, type: 'text'},
+  {key: 'capDollar', label: 'Cap$', edit: true, type: 'text'},
+  {key: 'initialQty', label: 'Init qty', edit: true, type: 'number'},
+  {key: 'topupDateStart', label: 'Topup start', edit: true, type: 'text', wide: true},
+  {key: 'topupInterval', label: 'Interval', edit: true, type: 'number'},
+  {key: 'topupQty', label: 'Topup qty', edit: true, type: 'number'},
+  {key: 'topupTimes', label: 'Times', edit: true, type: 'number'},
 ];
 
 function renderOutputTable() {
-  coupons.forEach(c => {
-    c._endDate = calcEndDate(c.topupDateStart, parseInt(c.topupInterval)||0, parseInt(c.topupTimes)||0);
+  coupons.forEach(function(c) {
+    if (c._expireDate && c.topupInterval <= 1) {
+      c._endDate = c._expireDate;
+    } else {
+      c._endDate = calcEndDate(c.topupDateStart, parseInt(c.topupInterval) || 0, parseInt(c.topupTimes) || 0);
+    }
   });
-  let html = '<thead><tr>' + OUT_COLS.map(c => `<th>${c.label}</th>`).join('') + '</tr></thead><tbody>';
-  coupons.forEach((c, ci) => {
+  var html = '<thead><tr>' + OUT_COLS.map(function(c, i) {
+    return '<th>' + c.label + '<button class="th-copy" onclick="copyColumn(' + i + ')" title="复制整列">⧈</button></th>';
+  }).join('') + '</tr></thead><tbody>';
+  coupons.forEach(function(c, ci) {
     html += '<tr>';
-    OUT_COLS.forEach(col => {
-      const val = c[col.key] !== undefined ? c[col.key] : '';
+    OUT_COLS.forEach(function(col) {
+      var val = c[col.key] !== undefined ? c[col.key] : '';
       if (col.edit) {
-        html += `<td><input type="${col.type}" value="${esc(String(val))}" data-ci="${ci}" data-key="${col.key}" onchange="onCellChange(this)"${col.wide?' class="wide"':''}></td>`;
+        html += '<td><input type="' + col.type + '" value="' + esc(String(val)) + '" data-ci="' + ci + '" data-key="' + col.key + '" onchange="onCellChange(this)"' + (col.wide ? ' class="wide"' : '') + '></td>';
       } else {
-        html += `<td>${esc(String(val))}</td>`;
+        html += '<td>' + esc(String(val)) + '</td>';
       }
     });
     html += '</tr>';
@@ -627,74 +714,60 @@ function renderOutputTable() {
 }
 
 function onCellChange(el) {
-  const ci = +el.dataset.ci, key = el.dataset.key;
+  var ci = +el.dataset.ci, key = el.dataset.key;
   coupons[ci][key] = el.value;
-  coupons[ci]._endDate = calcEndDate(coupons[ci].topupDateStart, parseInt(coupons[ci].topupInterval)||0, parseInt(coupons[ci].topupTimes)||0);
+  coupons[ci]._endDate = (coupons[ci]._expireDate && coupons[ci].topupInterval <= 1) ? coupons[ci]._expireDate : calcEndDate(coupons[ci].topupDateStart, parseInt(coupons[ci].topupInterval) || 0, parseInt(coupons[ci].topupTimes) || 0);
   renderOutputTable();
 }
 
-function applyGlobalConfig() {
-  const start = document.getElementById('cfgTopupStart').value.trim();
-  const interval = +document.getElementById('cfgTopupInterval').value || 7;
-  const times = +document.getElementById('cfgTopupTimes').value || 3;
-  const qty = +document.getElementById('cfgTopupQty').value || 0;
-  globalConfig = {topupStart:start, topupInterval:interval, topupTimes:times, topupQty:qty};
-  coupons.forEach(c => {
-    if (start) c.topupDateStart = start;
-    c.topupInterval = interval;
-    if (!c.topupTimes) c.topupTimes = times;
-    if (qty > 0 && !c.topupQty) c.topupQty = qty;
+function copyColumn(colIdx) {
+  var key = OUT_COLS[colIdx].key;
+  var vals = coupons.map(function(c) {
+    if (key === '_endDate') return (c._expireDate && c.topupInterval <= 1) ? c._expireDate : calcEndDate(c.topupDateStart, parseInt(c.topupInterval) || 0, parseInt(c.topupTimes) || 0);
+    return c[key] !== undefined ? String(c[key]) : '';
   });
-  if (coupons.length) renderOutputTable();
-}
-
-function autoCalcTopupStart() {
-  if (!coupons.length) return;
-  const sd = parseDateMDY(coupons[0].startDate);
-  if (!sd) { showStatus('无法解析 Start 日期', 'err'); return; }
-  const str = fmtDate(addDays(sd, 7));
-  document.getElementById('cfgTopupStart').value = str;
-  globalConfig.topupStart = str;
-  coupons.forEach(c => c.topupDateStart = str);
-  renderOutputTable();
-  showStatus(`Topup Start = ${str}`, 'ok');
+  navigator.clipboard.writeText(vals.join('\n')).then(function() {
+    var btns = document.querySelectorAll('.th-copy');
+    btns[colIdx].textContent = '✓'; btns[colIdx].style.background = '#10b981'; btns[colIdx].style.color = '#fff';
+    setTimeout(function() { btns[colIdx].textContent = '⧈'; btns[colIdx].style.background = ''; btns[colIdx].style.color = ''; }, 1000);
+  });
 }
 
 // ========== Export ==========
 function buildExportData() {
-  const h = ['Code','Curr.','Product','Start','End','Cost Center','Tag','sku',
-    'Usage per account','payment limit','Device limit','New user only','Traveldate limit',
-    'Discount$','Minspend$','Discount%','Cap$','Initial qty',
-    'date start to top up','top up interval','top up qty per time','top up times'];
-  const r = coupons.map(c => {
-    const end = calcEndDate(c.topupDateStart, parseInt(c.topupInterval)||0, parseInt(c.topupTimes)||0);
-    return [c.code,c.currency,c.product,c.startDate,end,c.costCenter,c.tag,
-      c.sku,c.usagePerAccount,c.paymentLimit,c.deviceLimit,c.newUserOnly,
-      c.travelDateLimit,c.discountDollar,c.minspendDollar,c.discountPct,c.capDollar,
-      c.initialQty,c.topupDateStart,c.topupInterval,c.topupQty,c.topupTimes];
+  var h = ['Code', 'Curr.', 'Product', 'Start', 'End', 'Cost Center', 'Tag', 'sku',
+    'Usage per account', 'payment limit', 'Device limit', 'New user only', 'Traveldate limit',
+    'Discount$', 'Minspend$', 'Discount%', 'Cap$', 'Initial qty',
+    'date start to top up', 'top up interval', 'top up qty per time', 'top up times'];
+  var r = coupons.map(function(c) {
+    var end = (c._expireDate && c.topupInterval <= 1) ? c._expireDate : calcEndDate(c.topupDateStart, parseInt(c.topupInterval) || 0, parseInt(c.topupTimes) || 0);
+    return [c.code, c.currency, c.product, c.startDate, end, c.costCenter, c.tag,
+      c.sku, c.usagePerAccount, c.paymentLimit, c.deviceLimit, c.newUserOnly,
+      c.travelDateLimit, c.discountDollar, c.minspendDollar, c.discountPct, c.capDollar,
+      c.initialQty, c.topupDateStart, c.topupInterval, c.topupQty, c.topupTimes];
   });
-  return {headers:h, rows:r};
+  return {headers: h, rows: r};
 }
 
 function exportXlsx() {
-  const {headers, rows} = buildExportData();
-  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-  ws['!cols'] = headers.map((h,i) => ({wch: Math.min(Math.max(h.length, ...rows.map(r=>String(r[i]||'').length))+2, 30)}));
-  const wb = XLSX.utils.book_new();
+  var data = buildExportData();
+  var ws = XLSX.utils.aoa_to_sheet([data.headers].concat(data.rows));
+  ws['!cols'] = data.headers.map(function(h, i) { return {wch: Math.min(Math.max(h.length, ...data.rows.map(function(r) { return String(r[i] || '').length; })) + 2, 30)}; });
+  var wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Sheet2');
   XLSX.writeFile(wb, 'coupon_output.xlsx');
 }
 
 function exportCsv() {
-  const {headers, rows} = buildExportData();
-  const all = [headers, ...rows];
-  const csv = all.map(r => r.map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(',')).join('\n');
-  const blob = new Blob(['﻿' + csv], {type:'text/csv;charset=utf-8'});
-  const a = document.createElement('a');
+  var data = buildExportData();
+  var all = [data.headers].concat(data.rows);
+  var csv = all.map(function(r) { return r.map(function(v) { return '"' + String(v || '').replace(/"/g, '""') + '"'; }).join(','); }).join('\n');
+  var blob = new Blob(['﻿' + csv], {type: 'text/csv;charset=utf-8'});
+  var a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = 'coupon_output.csv'; a.click();
 }
 
-function esc(s) { const d = document.createElement('div'); d.textContent = s||''; return d.innerHTML; }
+function esc(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 </script>
 </body>
 </html>
