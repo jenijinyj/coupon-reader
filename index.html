@@ -188,10 +188,10 @@ function parseValue(str) {
   const pctM = str.match(new RegExp('(\\d+(?:\\.\\d+)?)\\s*%\\s*OFF\\s*\\(?[^)]*?(?:max|up\\s+to|capped)\\s+' + C + '?\\s*' + N, 'i'));
   if (pctM) { r.discountPct = pctM[1] + '%'; r.capDollar = clean(pctM[2]); return r; }
   // 2) Pct "up to": "7% up to Rp188K OFF min spend Rp600K"
-  const upToM = str.match(new RegExp('(\\d+(?:\\.\\d+)?)\\s*%\\s*up\\s+to\\s+' + C + '?\\s*' + N + '(?:\\s*OFF)?.*?(?:min\\.?\\s*spend|min\\s+spend)\\s*' + C + '?\\s*' + N, 'is'));
+  const upToM = str.match(new RegExp('(\\d+(?:\\.\\d+)?)\\s*%\\s*up\\s+to\\s+' + C + '?\\s*' + N + '(?:\\s*OFF)?.*?(?:min\\.?\\s*spend|min\\s+spend|m/s)\\s*' + C + '?\\s*' + N, 'is'));
   if (upToM) { r.discountPct = upToM[1] + '%'; r.capDollar = clean(upToM[2]); r.minspendDollar = clean(upToM[3]); return r; }
   // 3) Fixed: "Rp188.000 OFF ... min spend Rp2,500,000"
-  const fixM = str.match(new RegExp(C + '\\s*' + N + '\\s*OFF.*?(?:min\\.?\\s*spend|min\\s+spend)\\s*' + C + '?\\s*' + N, 'is'));
+  const fixM = str.match(new RegExp(C + '\\s*' + N + '\\s*OFF.*?(?:min\\.?\\s*spend|min\\s+spend|m/s)\\s*' + C + '?\\s*' + N, 'is'));
   if (fixM) { r.discountDollar = clean(fixM[1]); r.minspendDollar = clean(fixM[2]); return r; }
   return r;
 }
@@ -310,41 +310,114 @@ function autoCalcTopupTimes() {
   });
 }
 
-// ========== Format 1: Column-based Extractor ==========
+// ========== Product Code Mapping ==========
+const PRODUCT_CODES = {
+  'flight': 'F',
+  'flights': 'F',
+  'hotel': 'H',
+  'hotels': 'H',
+  'china train': 'T',
+  'train': 'T',
+  'international train': 'E',
+  'attractions': 'P',
+  'tours': 'P',
+  'attractions & tours': 'P',
+  'cruise': 'CRU',
+  'cruises': 'CRU',
+  'packaged tours': 'TOR',
+  'tour': 'TOR',
+  'car rental': 'C',
+  'car': 'C',
+  'airport transfer': 'A',
+  'transfer': 'A',
+  'bundle': 'X',
+  'bundlesave': 'X',
+  'bundle&save': 'X'
+};
+
+function getProductCode(str) {
+  if (!str) return '';
+  const lower = str.toLowerCase().trim();
+  // Exact match first
+  if (PRODUCT_CODES[lower]) return PRODUCT_CODES[lower];
+  // Contains match
+  for (const key in PRODUCT_CODES) {
+    if (lower.includes(key)) return PRODUCT_CODES[key];
+  }
+  return '';
+}
+
+// ========== Format 1: Column-based Extractor (multi-section) ==========
 function extractColumnFormat(rows) {
-  let hri = -1;
-  for (let i = 0; i < Math.min(rows.length, 10); i++) {
-    if (rows[i].some(function(c) { return c.trim() === 'Coupon ID'; })) { hri = i; break; }
-  }
-  if (hri < 0) throw new Error('Format 1: 未找到 Coupon ID 表头');
-  const hr = rows[hri];
-  const months = {jan: '1', feb: '2', mar: '3', apr: '4', may: '5', jun: '6', jul: '7', aug: '8', sep: '9', oct: '10', nov: '11', dec: '12'};
-  const dateM = hr[0].trim().match(/(\d{1,2})[-\s]([a-zA-Z]{3})/);
-  const startDate = dateM ? (months[dateM[2].toLowerCase().substring(0, 3)] || '') + '/' + dateM[1] + '/2026' : hr[0].trim();
+  var allCoupons = [];
+  var months = {jan: '1', feb: '2', mar: '3', apr: '4', may: '5', jun: '6', jul: '7', aug: '8', sep: '9', oct: '10', nov: '11', dec: '12'};
 
-  const groups = [];
-  for (let i = 1; i < hr.length; i++) {
-    if (hr[i].trim() === 'Coupon ID' && i + 1 < hr.length) groups.push({fc: i, vc: i + 1});
-  }
-  if (!groups.length) throw new Error('Format 1: 未找到数据列');
-
-  return groups.map(function(g) {
-    const fields = {};
-    for (let r = hri + 1; r < rows.length; r++) {
-      const fn = (rows[r][g.fc] || '').trim();
-      const key = matchField(fn);
-      if (key) fields[key] = (rows[r][g.vc] || '').trim();
+  // Scan ALL rows for "Coupon ID" headers
+  for (var hri = 0; hri < rows.length; hri++) {
+    var pcnCount = 0;
+    for (var j = 0; j < rows[hri].length; j++) {
+      if (rows[hri][j].trim() === 'Coupon ID') pcnCount++;
     }
-    return buildCouponFromFields(fields, startDate);
-  }).filter(function(c) { return c && c.code; });
+    if (pcnCount < 1) continue;
+
+    var hr = rows[hri];
+    // Get section date from first cell (e.g., "4 Sep\n12 AM")
+    var sectionDate = hr[0].trim();
+    var dateM = sectionDate.match(/(\d{1,2})\s+([a-zA-Z]{3})/);
+    var timeM = sectionDate.match(/(\d{1,2})\s*([APap][Mm])/);
+    var startDate = '';
+    if (dateM) {
+      var mon = months[dateM[2].toLowerCase().substring(0, 3)] || '';
+      if (mon) startDate = mon + '/' + dateM[1] + '/2026';
+    }
+
+    // Find coupon column groups
+    var groups = [];
+    for (var i = 1; i < hr.length; i++) {
+      if (hr[i].trim() === 'Coupon ID' && i + 1 < hr.length) groups.push({fc: i, vc: i + 1});
+    }
+    if (!groups.length) continue;
+
+    // Extract each coupon in this section
+    for (var gi = 0; gi < groups.length; gi++) {
+      var g = groups[gi];
+      var fields = {};
+      // Read code from header row (value column)
+      fields.code = (hr[g.vc] || '').trim();
+
+      for (var r = hri + 1; r < rows.length; r++) {
+        // Stop at next section header
+        var nextPcn = 0;
+        for (var nj = 0; nj < rows[r].length; nj++) { if (rows[r][nj].trim() === 'Coupon ID') nextPcn++; }
+        if (nextPcn > 0 && r !== hri) break;
+
+        var fn = (rows[r][g.fc] || '').trim();
+        var key = matchField(fn);
+        if (key) fields[key] = (rows[r][g.vc] || '').trim();
+      }
+
+      if (!fields.code) continue;
+
+      // Build release date from section date + time
+      if (timeM && !fields.release) {
+        var th = parseInt(timeM[1]);
+        var ampm = timeM[2].toUpperCase();
+        if (ampm === 'PM' && th !== 12) th += 12;
+        if (ampm === 'AM' && th === 12) th = 0;
+        fields.release = (fields.release || '') || (startDate ? startDate.replace(/\/\d{4}$/, '/2026') + ' ' + th + ':00' : '');
+      }
+
+      allCoupons.push(buildCouponFromFields(fields, startDate));
+    }
+  }
+  return allCoupons.filter(function(c) { return c && c.code; });
 }
 
 function buildCouponFromFields(fields, startDate) {
   const val = parseValue(fields.mechanism || '');
   const rp = fields.release ? parseDateTimeStr(fields.release) : {date: '', time: ''};
   const v = fields.validity ? parseValidity(fields.validity) : {};
-  const pl = (fields.product || '').toLowerCase();
-  const product = fields.product ? (pl.includes('flight') ? 'FLIGHT' : 'HOTEL') : '';
+  const product = getProductCode(fields.product || '');
   const ccM = (fields.budget || '').match(/\((\d+)\)|(\d{3,})/);
 
   return {
@@ -383,9 +456,18 @@ function buildCouponFromFields(fields, startDate) {
 }
 
 function parseDateTimeStr(str) {
-  const m = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s*(\d{1,2}:\d{2}\s*[APap][Mm])?/);
-  if (!m) return {date: str, time: ''};
-  return {date: parseInt(m[1]) + '/' + parseInt(m[2]) + '/' + m[3], time: m[4] ? m[4].replace(/\s/g, '').toLowerCase().replace(':00', '') : ''};
+  if (!str) return {date: '', time: ''};
+  // Format 1: "M/D/YYYY H:MM" or "M/D/YYYY, H:MM PM"
+  var m = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s*(\d{1,2}:\d{2}\s*[APap][Mm])?/);
+  if (m) return {date: parseInt(m[1]) + '/' + parseInt(m[2]) + '/' + m[3], time: m[4] ? m[4].replace(/\s/g, '').toLowerCase().replace(':00', '') : ''};
+  // Format 2: "YYYY/M/D H:MM" (e.g., "2026/9/4 0:00")
+  m = str.match(/(\d{4})\/(\d{1,2})\/(\d{1,2})\s*(\d{1,2}):(\d{2})?/);
+  if (m) {
+    var h = parseInt(m[4]);
+    var timeStr = h + ':' + (m[5] || '00');
+    return {date: parseInt(m[2]) + '/' + parseInt(m[3]) + '/' + m[1], time: timeStr.replace(':00', '')};
+  }
+  return {date: str, time: ''};
 }
 
 // ========== Format 2: Key-Value Extractor ==========
@@ -407,8 +489,7 @@ function extractKeyValueFormat(rows) {
     const key = matchField(c0);
     if (key && c1) {
       if (key === 'product') {
-        const pl = c1.toLowerCase();
-        currentBlock.product = pl.includes('flight') ? 'FLIGHT' : (pl.includes('hotel') ? 'HOTEL' : '');
+        currentBlock.product = getProductCode(c1);
         currentBlock.sku = c1;
       } else { currentBlock[key] = c1; }
     }
@@ -420,8 +501,7 @@ function extractKeyValueFormat(rows) {
     const v = b.validity ? parseValidity(b.validity) : {};
     let product = b.product || '';
     if (!product && b._hint) {
-      const h = b._hint.toLowerCase();
-      product = h.includes('flight') ? 'FLIGHT' : (h.includes('hotel') ? 'HOTEL' : '');
+      product = getProductCode(b._hint);
     }
     const ccM = (b.budget || '').match(/(\d{3,})/);
     const topupQty = parseInt(v.topupQty) || 0;
@@ -501,8 +581,10 @@ function extractColumnKVFormat(rows) {
     let sectionProduct = '';
     for (let dr = ri - 1; dr >= Math.max(0, ri - 5); dr--) {
       const title = (rows[dr][0] || '').trim();
-      if (/^FLIGHT/i.test(title)) { sectionProduct = 'FLIGHT'; break; }
-      if (/^HOTEL/i.test(title)) { sectionProduct = 'HOTEL'; break; }
+      if (title) {
+        const code = getProductCode(title);
+        if (code) { sectionProduct = code; break; }
+      }
     }
 
     for (let gi = 0; gi < groups.length; gi++) {
@@ -544,10 +626,7 @@ function extractColumnKVFormat(rows) {
 
         if (fieldKey === 'product') {
           fields.sku = value;
-          const pl = value.toLowerCase();
-          if (pl.includes('flight')) fields._productType = 'FLIGHT';
-          else if (pl.includes('hotel')) fields._productType = 'HOTEL';
-          else fields._productType = sectionProduct;
+          fields._productType = getProductCode(value) || sectionProduct;
         }
       }
 
@@ -646,7 +725,7 @@ function renderAll() { renderCouponCards(); renderOutputTable(); }
 function renderCouponCards() {
   document.getElementById('couponCards').innerHTML = coupons.map(function(c) {
     return '<div class="coupon-card">' +
-      '<div class="code">' + esc(c.code) + ' <span class="badge ' + (c.product === 'HOTEL' ? 'badge-h' : 'badge-f') + '">' + (c.product === 'HOTEL' ? 'Hotel' : c.product === 'FLIGHT' ? 'Flight' : c.product || '?') + '</span></div>' +
+      '<div class="code">' + esc(c.code) + ' <span class="badge ' + (c.product === 'H' ? 'badge-h' : 'badge-f') + '">' + c.product + '</span></div>' +
       '<div class="fr"><span class="l">Currency</span><span class="v">' + esc(c.currency) + '</span></div>' +
       '<div class="fr"><span class="l">SKU</span><span class="v">' + esc(c.sku) + '</span></div>' +
       '<div class="fr"><span class="l">Mechanism</span><span class="v">' + esc(c._mechanism) + '</span></div>' +
@@ -689,7 +768,7 @@ const OUT_COLS = [
 
 function renderOutputTable() {
   coupons.forEach(function(c) {
-    if (c._expireDate && c.topupInterval <= 1) {
+    if (c._expireDate && (c.topupInterval <= 1 || !c.topupTimes)) {
       c._endDate = c._expireDate;
     } else {
       c._endDate = calcEndDate(c.topupDateStart, parseInt(c.topupInterval) || 0, parseInt(c.topupTimes) || 0);
@@ -716,14 +795,14 @@ function renderOutputTable() {
 function onCellChange(el) {
   var ci = +el.dataset.ci, key = el.dataset.key;
   coupons[ci][key] = el.value;
-  coupons[ci]._endDate = (coupons[ci]._expireDate && coupons[ci].topupInterval <= 1) ? coupons[ci]._expireDate : calcEndDate(coupons[ci].topupDateStart, parseInt(coupons[ci].topupInterval) || 0, parseInt(coupons[ci].topupTimes) || 0);
+  coupons[ci]._endDate = (coupons[ci]._expireDate && (coupons[ci].topupInterval <= 1 || !coupons[ci].topupTimes)) ? coupons[ci]._expireDate : calcEndDate(coupons[ci].topupDateStart, parseInt(coupons[ci].topupInterval) || 0, parseInt(coupons[ci].topupTimes) || 0);
   renderOutputTable();
 }
 
 function copyColumn(colIdx) {
   var key = OUT_COLS[colIdx].key;
   var vals = coupons.map(function(c) {
-    if (key === '_endDate') return (c._expireDate && c.topupInterval <= 1) ? c._expireDate : calcEndDate(c.topupDateStart, parseInt(c.topupInterval) || 0, parseInt(c.topupTimes) || 0);
+    if (key === '_endDate') return (c._expireDate && (c.topupInterval <= 1 || !c.topupTimes)) ? c._expireDate : calcEndDate(c.topupDateStart, parseInt(c.topupInterval) || 0, parseInt(c.topupTimes) || 0);
     return c[key] !== undefined ? String(c[key]) : '';
   });
   navigator.clipboard.writeText(vals.join('\n')).then(function() {
@@ -740,7 +819,7 @@ function buildExportData() {
     'Discount$', 'Minspend$', 'Discount%', 'Cap$', 'Initial qty',
     'date start to top up', 'top up interval', 'top up qty per time', 'top up times'];
   var r = coupons.map(function(c) {
-    var end = (c._expireDate && c.topupInterval <= 1) ? c._expireDate : calcEndDate(c.topupDateStart, parseInt(c.topupInterval) || 0, parseInt(c.topupTimes) || 0);
+    var end = (c._expireDate && (c.topupInterval <= 1 || !c.topupTimes)) ? c._expireDate : calcEndDate(c.topupDateStart, parseInt(c.topupInterval) || 0, parseInt(c.topupTimes) || 0);
     return [c.code, c.currency, c.product, c.startDate, end, c.costCenter, c.tag,
       c.sku, c.usagePerAccount, c.paymentLimit, c.deviceLimit, c.newUserOnly,
       c.travelDateLimit, c.discountDollar, c.minspendDollar, c.discountPct, c.capDollar,
