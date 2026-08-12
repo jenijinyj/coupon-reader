@@ -184,9 +184,21 @@ function parseValue(str) {
   }
   function clean(s) { return s ? parseNum(s.replace(/[,.]$/, '')) : ''; }
   const C = '(?:S\\$|RM|US\\$|Rp|\\$)', N = '([\\d.,]+[Kk]?)';
-  // 1) Pct with OFF: "10% OFF (max Rp200.000)"
-  const pctM = str.match(new RegExp('(\\d+(?:\\.\\d+)?)\\s*%\\s*OFF\\s*\\(?[^)]*?(?:max|up\\s+to|capped)\\s+' + C + '?\\s*' + N, 'i'));
-  if (pctM) { r.discountPct = pctM[1] + '%'; r.capDollar = clean(pctM[2]); return r; }
+
+  // Slash format: "RM50/RM600" → discount 50, min spend 600
+  const slashM = str.match(new RegExp(C + '\\s*' + N + '\\s*/\\s*' + C + '\\s*' + N, 'i'));
+  if (slashM) { r.discountDollar = clean(slashM[1]); r.minspendDollar = clean(slashM[2]); return r; }
+
+  // 1) Pct with OFF: "10% OFF (max Rp200.000)" or "50% OFF (Cap RM250, min spend RM2500)"
+  const pctM = str.match(new RegExp('(\\d+(?:\\.\\d+)?)\\s*%\\s*OFF\\s*\\(?[^)]*?(?:max|up\\s+to|capped|cap)\\s+' + C + '?\\s*' + N, 'i'));
+  if (pctM) {
+    r.discountPct = pctM[1] + '%';
+    r.capDollar = clean(pctM[2]);
+    // Also try to extract min spend from the same string
+    const minSpendM = str.match(new RegExp('(?:min\\.?\\s*spend|min\\s+spend|m/s)\\s*' + C + '?\\s*' + N, 'i'));
+    if (minSpendM) r.minspendDollar = clean(minSpendM[1]);
+    return r;
+  }
   // 2) Pct "up to": "7% up to Rp188K OFF min spend Rp600K"
   const upToM = str.match(new RegExp('(\\d+(?:\\.\\d+)?)\\s*%\\s*up\\s+to\\s+' + C + '?\\s*' + N + '(?:\\s*OFF)?.*?(?:min\\.?\\s*spend|min\\s+spend|m/s)\\s*' + C + '?\\s*' + N, 'is'));
   if (upToM) { r.discountPct = upToM[1] + '%'; r.capDollar = clean(upToM[2]); r.minspendDollar = clean(upToM[3]); return r; }
@@ -457,15 +469,23 @@ function buildCouponFromFields(fields, startDate) {
 
 function parseDateTimeStr(str) {
   if (!str) return {date: '', time: ''};
-  // Format 1: "M/D/YYYY H:MM" or "M/D/YYYY, H:MM PM"
-  var m = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s*(\d{1,2}:\d{2}\s*[APap][Mm])?/);
-  if (m) return {date: parseInt(m[1]) + '/' + parseInt(m[2]) + '/' + m[3], time: m[4] ? m[4].replace(/\s/g, '').toLowerCase().replace(':00', '') : ''};
+  // Format 1: "M/D/YYYY H:MM AM/PM" or "M/D/YYYY, H:MM PM"
+  var m = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4}),?\s*(\d{1,2}:\d{2}\s*[APap][Mm])?/);
+  if (m) {
+    var year = m[3].length === 2 ? '20' + m[3] : m[3];
+    return {date: parseInt(m[1]) + '/' + parseInt(m[2]) + '/' + year, time: m[4] ? m[4].replace(/\s+/g, '').toLowerCase().replace(':00', '') : ''};
+  }
   // Format 2: "YYYY/M/D H:MM" (e.g., "2026/9/4 0:00")
   m = str.match(/(\d{4})\/(\d{1,2})\/(\d{1,2})\s*(\d{1,2}):(\d{2})?/);
   if (m) {
     var h = parseInt(m[4]);
     var timeStr = h + ':' + (m[5] || '00');
     return {date: parseInt(m[2]) + '/' + parseInt(m[3]) + '/' + m[1], time: timeStr.replace(':00', '')};
+  }
+  // Format 3: "M/D/YY H:MM AM/PM" (e.g., "9/9/26 12:00 AM")
+  m = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{2})\s+(\d{1,2}:\d{2}\s*[APap][Mm])/);
+  if (m) {
+    return {date: parseInt(m[1]) + '/' + parseInt(m[2]) + '/20' + m[3], time: m[4].replace(/\s+/g, '').toLowerCase().replace(':00', '')};
   }
   return {date: str, time: ''};
 }
@@ -749,17 +769,17 @@ const OUT_COLS = [
   {key: '_endDate', label: 'End', edit: false},
   {key: 'costCenter', label: 'Cost Center', edit: false},
   {key: 'tag', label: 'Tag', edit: true, type: 'text'},
+  {key: 'discountDollar', label: 'Discount$', edit: true, type: 'text'},
+  {key: 'minspendDollar', label: 'Minspend$', edit: true, type: 'text'},
+  {key: 'discountPct', label: 'Discount%', edit: true, type: 'text'},
+  {key: 'capDollar', label: 'Cap$', edit: true, type: 'text'},
+  {key: 'initialQty', label: 'Init qty', edit: true, type: 'number'},
   {key: 'sku', label: 'sku', edit: true, type: 'text', wide: true},
   {key: 'usagePerAccount', label: 'Usage/acct', edit: true, type: 'text', wide: true},
   {key: 'paymentLimit', label: 'pay limit', edit: true, type: 'text'},
   {key: 'deviceLimit', label: 'Device', edit: true, type: 'text'},
   {key: 'newUserOnly', label: 'New user', edit: true, type: 'text'},
   {key: 'travelDateLimit', label: 'Travel date', edit: true, type: 'text'},
-  {key: 'discountDollar', label: 'Discount$', edit: true, type: 'text'},
-  {key: 'minspendDollar', label: 'Minspend$', edit: true, type: 'text'},
-  {key: 'discountPct', label: 'Discount%', edit: true, type: 'text'},
-  {key: 'capDollar', label: 'Cap$', edit: true, type: 'text'},
-  {key: 'initialQty', label: 'Init qty', edit: true, type: 'number'},
   {key: 'topupDateStart', label: 'Topup start', edit: true, type: 'text', wide: true},
   {key: 'topupInterval', label: 'Interval', edit: true, type: 'number'},
   {key: 'topupQty', label: 'Topup qty', edit: true, type: 'number'},
@@ -814,16 +834,16 @@ function copyColumn(colIdx) {
 
 // ========== Export ==========
 function buildExportData() {
-  var h = ['Code', 'Curr.', 'Product', 'Start', 'End', 'Cost Center', 'Tag', 'sku',
+  var h = ['Code', 'Curr.', 'Product', 'Start', 'End', 'Cost Center', 'Tag',
+    'Discount$', 'Minspend$', 'Discount%', 'Cap$', 'Initial qty', 'sku',
     'Usage per account', 'payment limit', 'Device limit', 'New user only', 'Traveldate limit',
-    'Discount$', 'Minspend$', 'Discount%', 'Cap$', 'Initial qty',
     'date start to top up', 'top up interval', 'top up qty per time', 'top up times'];
   var r = coupons.map(function(c) {
     var end = (c._expireDate && (c.topupInterval <= 1 || !c.topupTimes)) ? c._expireDate : calcEndDate(c.topupDateStart, parseInt(c.topupInterval) || 0, parseInt(c.topupTimes) || 0);
     return [c.code, c.currency, c.product, c.startDate, end, c.costCenter, c.tag,
+      c.discountDollar, c.minspendDollar, c.discountPct, c.capDollar, c.initialQty,
       c.sku, c.usagePerAccount, c.paymentLimit, c.deviceLimit, c.newUserOnly,
-      c.travelDateLimit, c.discountDollar, c.minspendDollar, c.discountPct, c.capDollar,
-      c.initialQty, c.topupDateStart, c.topupInterval, c.topupQty, c.topupTimes];
+      c.travelDateLimit, c.topupDateStart, c.topupInterval, c.topupQty, c.topupTimes];
   });
   return {headers: h, rows: r};
 }
