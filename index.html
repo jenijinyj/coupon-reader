@@ -92,20 +92,29 @@ function parseCSV(text) {
   while (i < text.length) {
     const c = text[i];
     if (inQuotes) {
-      if (c === '"') { if (i+1 < text.length && text[i+1] === '"') { field += '"'; i += 2; } else { inQuotes = false; i++; } }
-      else { field += c; i++; }
+      if (c === '"') {
+        if (i+1 < text.length && text[i+1] === '"') { field += '"'; i += 2; }
+        else { inQuotes = false; i++; }
+      } else {
+        // Inside quotes: include newlines as part of the field value
+        field += c;
+        i++;
+      }
     } else {
       if (c === '"') { inQuotes = true; i++; }
       else if (c === ',') { row.push(field); field = ''; i++; }
       else if (c === '\n' || c === '\r') {
         if (c === '\r' && i+1 < text.length && text[i+1] === '\n') i++;
-        row.push(field); field = ''; rows.push(row); row = []; i++;
+        row.push(field); field = '';
+        rows.push(row); row = [];
+        i++;
       } else { field += c; i++; }
     }
   }
-  row.push(field); rows.push(row);
-  const maxLen = Math.max(...rows.map(r => r.length));
-  rows.forEach(r => { while(r.length < maxLen) r.push(''); });
+  row.push(field);
+  if (row.length > 0 && row.some(function(f) { return f !== ''; })) rows.push(row);
+  const maxLen = Math.max.apply(null, rows.map(function(r) { return r.length; }));
+  rows.forEach(function(r) { while(r.length < maxLen) r.push(''); });
   return rows;
 }
 
@@ -130,7 +139,6 @@ const FIELD_RULES = [
   {key:'peruid', kw:['per uid','usage limit','usage per','per account'], exact:['usage']},
   {key:'channel', kw:['channel','whitelist'], exact:['channel']},
   {key:'description', kw:['description','remark','note'], exact:['description']},
-  {key:'quantity', kw:['quantity','used limit','claim limit'], exact:['quantity']},
 ];
 
 function matchField(fieldName) {
@@ -163,7 +171,13 @@ function detectFormat(rows) {
 function parseNum(s) {
   if (!s) return '';
   s = s.trim();
+  // K suffix: 188K → 188000
   if (/[Kk]$/.test(s)) return String(Math.round(parseFloat(s.replace(/[Kk]$/, '').replace(/[.,]/g, '')) * 1000));
+  // Mio suffix: 5.5Mio → 5500000
+  if (/mio$/i.test(s)) {
+    var numPart = s.replace(/mio$/i, '').trim().replace(/,/g, '');
+    return String(Math.round(parseFloat(numPart) * 1000000));
+  }
   if ((s.match(/\./g) || []).length > 1) return s.replace(/\./g, '');
   if ((s.match(/,/g) || []).length > 1) return s.replace(/,/g, '');
   return s.replace(/[.,]/g, '');
@@ -181,30 +195,34 @@ function parseValue(str) {
     else if (sym === 'US$') r.currency = 'USD';
     else if (sym === 'RP') r.currency = 'IDR';
     else r.currency = sym;
+  } else if (/mio/i.test(str)) {
+    r.currency = 'IDR';
   }
   function clean(s) { return s ? parseNum(s.replace(/[,.]$/, '')) : ''; }
-  const C = '(?:S\\$|RM|US\\$|Rp|\\$)', N = '([\\d.,]+[Kk]?)';
+  const C = '(?:S\\$|RM|US\\$|Rp|\\$)?', N = '([\\d.,]+(?:[Kk]|io|Mio)?)';
 
   // Slash format: "RM50/RM600" → discount 50, min spend 600
   const slashM = str.match(new RegExp(C + '\\s*' + N + '\\s*/\\s*' + C + '\\s*' + N, 'i'));
   if (slashM) { r.discountDollar = clean(slashM[1]); r.minspendDollar = clean(slashM[2]); return r; }
 
-  // 1) Pct with OFF: "10% OFF (max Rp200.000)" or "50% OFF (Cap RM250, min spend RM2500)"
-  const pctM = str.match(new RegExp('(\\d+(?:\\.\\d+)?)\\s*%\\s*OFF\\s*\\(?[^)]*?(?:max|up\\s+to|capped|cap)\\s+' + C + '?\\s*' + N, 'i'));
+  // 1) Pct with OFF: "10% OFF (max Rp200.000)" or "50% OFF (Cap RM250, min spend RM2500)" or "9% OFF, capped at S$30"
+  const pctM = str.match(new RegExp('(\\d+(?:\\.\\d+)?)\\s*%\\s*OFF\\s*[,\\(]?\\s*[^)]*?(?:max|up\\s+to|capped|cap)\\s+(?:at\\s+)?(?:S\\$|RM|US\\$|Rp|\\$)?\\s*([\\d.,]+(?:[Kk]|io|Mio)?)', 'i'));
   if (pctM) {
     r.discountPct = pctM[1] + '%';
     r.capDollar = clean(pctM[2]);
-    // Also try to extract min spend from the same string
-    const minSpendM = str.match(new RegExp('(?:min\\.?\\s*spend|min\\s+spend|m/s)\\s*' + C + '?\\s*' + N, 'i'));
+    const minSpendM = str.match(new RegExp('(?:min\\.?\\s*spend|min\\s+spend|m/s)\\s*(?:S\\$|RM|US\\$|Rp|\\$)?\\s*([\\d.,]+(?:[Kk]|io|Mio)?)', 'i'));
     if (minSpendM) r.minspendDollar = clean(minSpendM[1]);
     return r;
   }
-  // 2) Pct "up to": "7% up to Rp188K OFF min spend Rp600K"
+  // 2) Pct "up to": "10% up to 1.500.000 Min Spend 5.5Mio"
   const upToM = str.match(new RegExp('(\\d+(?:\\.\\d+)?)\\s*%\\s*up\\s+to\\s+' + C + '?\\s*' + N + '(?:\\s*OFF)?.*?(?:min\\.?\\s*spend|min\\s+spend|m/s)\\s*' + C + '?\\s*' + N, 'is'));
   if (upToM) { r.discountPct = upToM[1] + '%'; r.capDollar = clean(upToM[2]); r.minspendDollar = clean(upToM[3]); return r; }
-  // 3) Fixed: "Rp188.000 OFF ... min spend Rp2,500,000"
+  // 3) Fixed with OFF: "Rp188.000 OFF ... min spend Rp2,500,000"
   const fixM = str.match(new RegExp(C + '\\s*' + N + '\\s*OFF.*?(?:min\\.?\\s*spend|min\\s+spend|m/s)\\s*' + C + '?\\s*' + N, 'is'));
   if (fixM) { r.discountDollar = clean(fixM[1]); r.minspendDollar = clean(fixM[2]); return r; }
+  // 4) Fixed without OFF: "Rp99000 min spend Rp1.200.000"
+  const noOffM = str.match(new RegExp(C + '\\s*' + N + '\\s+(?:min\\.?\\s*spend|min\\s+spend|m/s)\\s*' + C + '?\\s*' + N, 'i'));
+  if (noOffM) { r.discountDollar = clean(noOffM[1]); r.minspendDollar = clean(noOffM[2]); return r; }
   return r;
 }
 
@@ -214,14 +232,41 @@ function parseValidity(text) {
   if (!text) return r;
   const t = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const months = {jan: '1', feb: '2', mar: '3', apr: '4', may: '5', jun: '6', jul: '7', aug: '8', sep: '9', oct: '10', nov: '11', dec: '12'};
-  // Date range: "12 Aug 12PM - 18 Oct EOD"
-  const rangeM = t.match(/(\d{1,2})\s+([A-Za-z]{3,})\s*(\d{1,2}[:\s]*[APap]?[Mm]?)?\s*[-–]\s*(\d{1,2})\s+([A-Za-z]{3,})\s*(EOD|\d{1,2}[:\s]*[APap]?[Mm]?)?/i);
+  // Date range: "12 Aug 12PM - 18 Oct EOD" or "9 Sep 00:00 - 9 Sep 23:59"
+  const rangeM = t.match(/(\d{1,2})\s+([A-Za-z]{3,})\s*(?:\d{1,2}:\d{2}\s*(?:[APap][Mm])?|EOD)?\s*[-–]\s*(\d{1,2})\s+([A-Za-z]{3,})\s*(?:\d{1,2}:\d{2}\s*(?:[APap][Mm])?|EOD)?/i);
   if (rangeM) {
     const m1 = months[rangeM[2].toLowerCase().substring(0, 3)];
-    const m2 = months[rangeM[5].toLowerCase().substring(0, 3)];
+    const m2 = months[rangeM[4].toLowerCase().substring(0, 3)];
     r.startDate = m1 ? m1 + '/' + rangeM[1] + '/2026' : '';
-    r.endDate = m2 ? m2 + '/' + rangeM[4] + '/2026' : '';
-    if (rangeM[3]) r.tagTime = rangeM[3].replace(/\s+/g, '').toLowerCase().replace(':00', '');
+    r.endDate = m2 ? m2 + '/' + rangeM[3] + '/2026' : '';
+    // Extract start time if present
+    const timeM = t.match(/(\d{1,2}):\d{2}\s*[-–]/);
+    if (timeM) {
+      const h = parseInt(timeM[1]);
+      r.tagTime = h === 0 ? '12am' : h < 12 ? h + 'am' : h === 12 ? '12pm' : (h - 12) + 'pm';
+    }
+  }
+  // Single date: "9 Sep" or "9 Sep 12PM" or "9 Sep 00:00"
+  if (!r.startDate) {
+    const singleM = t.match(/(\d{1,2})\s+([A-Za-z]{3,})\s*,?\s*(\d{1,2}(?::\d{2})?\s*(?:[APap][Mm])?)?/);
+    if (singleM) {
+      const mon = months[singleM[2].toLowerCase().substring(0, 3)];
+      if (mon) {
+        r.startDate = mon + '/' + singleM[1] + '/2026';
+        r.endDate = mon + '/' + singleM[1] + '/2026';
+        if (singleM[3]) {
+          const timeStr = singleM[3].trim();
+          // Handle 24-hour format
+          const h24 = timeStr.match(/^(\d{1,2}):\d{2}/);
+          if (h24) {
+            const h = parseInt(h24[1]);
+            r.tagTime = h === 0 ? '12am' : h < 12 ? h + 'am' : h === 12 ? '12pm' : (h - 12) + 'pm';
+          } else {
+            r.tagTime = timeStr.replace(/\s+/g, '').toLowerCase().replace(':00', '');
+          }
+        }
+      }
+    }
   }
   // Drop time
   const dropM = t.match(/[Dd]rop\s*(?:at)?\s*(\d{1,2}[:\s]*[APap]?[Mm]?)/);
@@ -238,24 +283,51 @@ function parseValidity(text) {
   return r;
 }
 
-// ========== Date Range Parser (Format 3: "5-8 August") ==========
+// ========== Date Range Parser (Format 3: "5-8 August" or "9 Sep 00:00 - 9 Sep 23:59") ==========
 function parseRangeDate(str) {
   if (!str) return {startDate: '', endDate: '', tagTime: ''};
   const months = {jan: '1', feb: '2', mar: '3', apr: '4', may: '5', jun: '6', jul: '7', aug: '8', sep: '9', oct: '10', nov: '11', dec: '12'};
   let m;
+
+  // Range with 24-hour time: "9 Sep 00:00 - 9 Sep 23:59"
+  m = str.match(/(\d{1,2})\s+([A-Za-z]{3,})\s+\d{1,2}:\d{2}\s*[-–]\s*(\d{1,2})\s+([A-Za-z]{3,})\s+\d{1,2}:\d{2}/i);
+  if (m) {
+    const m1 = months[m[2].toLowerCase().substring(0, 3)] || '';
+    const m2 = months[m[4].toLowerCase().substring(0, 3)] || '';
+    if (m1 && m2) return {startDate: m1 + '/' + m[1] + '/2026', endDate: m2 + '/' + m[3] + '/2026', tagTime: '12am'};
+  }
+
+  // Range: "5-8 August"
   m = str.match(/(\d{1,2})\s*[-–]\s*(\d{1,2})\s+([A-Za-z]{3,})/);
   if (m) {
     const mon = months[m[3].toLowerCase().substring(0, 3)] || '';
     if (mon) return {startDate: mon + '/' + m[1] + '/2026', endDate: mon + '/' + m[2] + '/2026', tagTime: ''};
   }
-  m = str.match(/(\d{1,2})\s+([A-Za-z]{3,})\s*,?\s*(\d{1,2}\s*[APap]?[Mm]?)/);
+  // Single date with time: "5 Aug, 6PM" or "9 Sep, top up 11AM GMT+7"
+  m = str.match(/(\d{1,2})\s+([A-Za-z]{3,})/);
   if (m) {
     const mon = months[m[2].toLowerCase().substring(0, 3)] || '';
-    if (mon) return {
-      startDate: mon + '/' + m[1] + '/2026',
-      endDate: mon + '/' + m[1] + '/2026',
-      tagTime: m[3] ? m[3].replace(/\s+/g, '').toLowerCase().replace(':00', '') : ''
-    };
+    if (mon) {
+      // Extract time from the string (12-hour or 24-hour format)
+      let tagTime = '';
+      const timeM = str.match(/(\d{1,2})(?::\d{2})?\s*(?:[APap][Mm])/);
+      if (timeM) {
+        const h = parseInt(timeM[1]);
+        const isPM = /[Pp][Mm]/.test(timeM[0]);
+        if (isPM) {
+          tagTime = h === 12 ? '12pm' : h + 'pm';
+        } else {
+          tagTime = h === 12 ? '12am' : h + 'am';
+        }
+      }
+      return {startDate: mon + '/' + m[1] + '/2026', endDate: mon + '/' + m[1] + '/2026', tagTime: tagTime};
+    }
+  }
+  // Single date only: "9 Sep" or "5 August"
+  m = str.match(/(\d{1,2})\s+([A-Za-z]{3,})/);
+  if (m) {
+    const mon = months[m[2].toLowerCase().substring(0, 3)] || '';
+    if (mon) return {startDate: mon + '/' + m[1] + '/2026', endDate: mon + '/' + m[1] + '/2026', tagTime: ''};
   }
   return {startDate: '', endDate: '', tagTime: ''};
 }
@@ -264,11 +336,22 @@ function parseRangeDate(str) {
 function parseQuantityText(str) {
   if (!str) return {total: 0, initialQty: 0, topupStart: '', topupTimes: 0, topupQty: 0};
   const dateEntries = [];
-  const entryRegex = /(\d{1,2})\s+([A-Za-z]{3,})\s*[=:]\s*(\d+)/gi;
+
+  // Try format with separator: "9 Sep = 20" or "9 Sep: 20"
+  let entryRegex = /(\d{1,2})\s+([A-Za-z]{3,})\s*[=:]\s*(\d+)/gi;
   let m;
   while ((m = entryRegex.exec(str)) !== null) {
     dateEntries.push({day: parseInt(m[1]), month: m[2], qty: parseInt(m[3])});
   }
+
+  // If no matches, try format without separator: "9 Sep 20" or "9 Sep  20"
+  if (dateEntries.length === 0) {
+    entryRegex = /(\d{1,2})\s+([A-Za-z]{3,})\s+(\d+)/gi;
+    while ((m = entryRegex.exec(str)) !== null) {
+      dateEntries.push({day: parseInt(m[1]), month: m[2], qty: parseInt(m[3])});
+    }
+  }
+
   if (dateEntries.length > 0) {
     const months = {jan: '1', feb: '2', mar: '3', apr: '4', may: '5', jun: '6', jul: '7', aug: '8', sep: '9', oct: '10', nov: '11', dec: '12'};
     const initialQty = dateEntries[0].qty;
@@ -394,6 +477,7 @@ function extractColumnFormat(rows) {
     for (var gi = 0; gi < groups.length; gi++) {
       var g = groups[gi];
       var fields = {};
+      var qtyRaw = '';
       // Read code from header row (value column)
       fields.code = (hr[g.vc] || '').trim();
 
@@ -405,7 +489,21 @@ function extractColumnFormat(rows) {
 
         var fn = (rows[r][g.fc] || '').trim();
         var key = matchField(fn);
-        if (key) fields[key] = (rows[r][g.vc] || '').trim();
+
+        if (key === 'quota' || key === 'quantity') {
+          // Start collecting quantity data
+          qtyRaw = (rows[r][g.vc] || '').trim();
+          // Continue reading subsequent rows that don't have a field name
+          for (var r2 = r + 1; r2 < rows.length; r2++) {
+            var nextField = (rows[r2][g.fc] || '').trim();
+            if (nextField && matchField(nextField)) break; // Hit next field
+            var nextVal = (rows[r2][g.vc] || '').trim();
+            if (nextVal) qtyRaw += ' ' + nextVal;
+          }
+          fields.quota = qtyRaw;
+        } else if (key) {
+          fields[key] = (rows[r][g.vc] || '').trim();
+        }
       }
 
       if (!fields.code) continue;
@@ -449,18 +547,33 @@ function buildCouponFromFields(fields, startDate) {
     minspendDollar: val.minspendDollar,
     discountPct: val.discountPct,
     capDollar: val.capDollar,
-    initialQty: parseInt(fields.quota) || 0,
-    topupDateStart: v.startDate || '',
-    topupInterval: 7,
-    topupQty: parseInt(v.topupQty) || 0,
-    topupTimes: 0,
+    initialQty: (function() {
+      const q = parseQuantityText(fields.quota || '');
+      return q.initialQty || parseInt(fields.quota) || 0;
+    })(),
+    topupDateStart: (function() {
+      const q = parseQuantityText(fields.quota || '');
+      return q.topupStart || v.startDate || '';
+    })(),
+    topupInterval: 1,
+    topupQty: (function() {
+      const q = parseQuantityText(fields.quota || '');
+      return q.topupQty || parseInt(v.topupQty) || 0;
+    })(),
+    topupTimes: (function() {
+      const q = parseQuantityText(fields.quota || '');
+      return q.topupTimes || 0;
+    })(),
     _releaseDate: fields.release || '',
     _expireDate: fields.expire || v.endDate || '',
     _mechanism: fields.mechanism || '',
     _locale: fields.locale || '',
     _aidsid: fields.aidsid || '',
     _validity: fields.validity || '',
-    _totalQty: parseInt(v.totalQty) || 0,
+    _totalQty: (function() {
+      const q = parseQuantityText(fields.quota || '');
+      return q.total || parseInt(v.totalQty) || 0;
+    })(),
     _channel: fields.channel || '',
     _description: fields.description || '',
     _autoInterval: v._everyDay || null,
@@ -575,7 +688,7 @@ function extractColumnKVFormat(rows) {
     for (let j = 0; j < rows[ri].length; j++) {
       if (rows[ri][j].trim() === 'Promo Code Name') pcnCount++;
     }
-    if (pcnCount >= 2) headerRows.add(ri);
+    if (pcnCount >= 1) headerRows.add(ri);
   }
 
   for (let ri = 0; ri < rows.length; ri++) {
@@ -583,9 +696,9 @@ function extractColumnKVFormat(rows) {
     for (let j = 0; j < rows[ri].length; j++) {
       if (rows[ri][j].trim() === 'Promo Code Name') pcnCols.push(j);
     }
-    if (pcnCols.length < 2) continue;
+    if (pcnCols.length < 1) continue;
 
-    const step = pcnCols[1] - pcnCols[0];
+    const step = pcnCols.length > 1 ? pcnCols[1] - pcnCols[0] : 2;
     const groups = pcnCols.map(function(fc) { return {fc: fc, vc: fc + 1}; });
 
     // Date context
@@ -615,18 +728,79 @@ function extractColumnKVFormat(rows) {
       // Code from header
       fields.code = (rows[ri][g.vc] || '').trim();
 
+      // Budget is in the row above the header - search upward
+      var budgetRow = ri - 1;
+      while (budgetRow >= 0) {
+        var bf = (rows[budgetRow][g.fc] || '').trim();
+        if (bf === 'Budget') {
+          fields.budget = (rows[budgetRow][g.vc] || '').trim();
+          break;
+        }
+        if (bf && matchField(bf)) break;
+        budgetRow--;
+      }
+
       for (let r = ri + 1; r < rows.length; r++) {
         if (headerRows.has(r) && r !== ri) break;
         const fieldName = (rows[r][g.fc] || '').trim();
-        if (!fieldName) {
-          const contVal = (rows[r][g.vc] || '').trim();
-          if (contVal && qtyRaw) qtyRaw += ' ' + contVal;
+        const value = (rows[r][g.vc] || '').trim();
+
+        // Handle multi-line values ONLY for fields that truly span multiple rows
+        const multiLineFields = ['mechanism', 'description'];
+        const fk0 = matchField(fieldName);
+        // Skip budget - already handled by upward search
+        if (fk0 === 'budget') continue;
+
+        const isMultiLine = fk0 && ['mechanism', 'description'].indexOf(fk0) >= 0;
+        if (isMultiLine && value) {
+          // Check if next row has continuation (no field name, has value in same col)
+          let fullValue = value;
+          let r2 = r + 1;
+          while (r2 < rows.length) {
+            if (headerRows.has(r2)) break;
+            const nextField = (rows[r2][g.fc] || '').trim();
+            if (nextField && matchField(nextField)) break; // Hit next field
+            const nextVal = (rows[r2][g.vc] || '').trim();
+            if (nextVal && !fieldName) {
+              fullValue += ' ' + nextVal;
+              r2++;
+            } else if (!nextField && nextVal) {
+              fullValue += ' ' + nextVal;
+              r2++;
+            } else {
+              break;
+            }
+          }
+          fields[matchField(fieldName)] = fullValue;
           continue;
         }
-        const fieldKey = matchField(fieldName);
-        if (!fieldKey) continue;
 
-        const value = (rows[r][g.vc] || '').trim();
+        if (!fieldName) {
+          if (value && qtyRaw) qtyRaw += ' ' + value;
+          continue;
+        }
+
+        const fieldKey = matchField(fieldName);
+
+        // Check if fieldName is a date (e.g., "9 Sep", "10 Sep") - treat as quantity data
+        const isDateField = fieldName.match(/^\d{1,2}\s+[A-Za-z]{3}/);
+        if (isDateField) {
+          // Start collecting quantity data from date rows
+          qtyRaw = fieldName + ' ' + value;
+          for (let r2 = r + 1; r2 < rows.length; r2++) {
+            if (headerRows.has(r2)) break;
+            const nextField = (rows[r2][g.fc] || '').trim();
+            if (nextField && matchField(nextField)) break;
+            const nextVal = (rows[r2][g.vc] || '').trim();
+            if (nextVal) qtyRaw += ' ' + nextField + ' ' + nextVal;
+            else if (!nextField) continue;
+            else break;
+          }
+          fields.quantity = qtyRaw;
+          continue;
+        }
+
+        if (!fieldKey) continue;
 
         if (fieldKey === 'quantity' || fieldKey === 'quota') {
           qtyRaw = value;
@@ -655,7 +829,7 @@ function extractColumnKVFormat(rows) {
 
       const dateCtx = dateContexts[gi] || '';
       const vDate = parseRangeDate(fields.validity || dateCtx);
-      const qtyInfo = parseQuantityText(fields.quantity || '');
+      const qtyInfo = parseQuantityText(fields.quantity || fields.quota || '');
       const val = parseValue(fields.mechanism || '');
       const ccM = (fields.budget || '').match(/(\d{3,})/);
 
