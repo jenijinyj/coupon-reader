@@ -22,14 +22,6 @@ h1{font-size:24px;font-weight:700;margin-bottom:4px}
 .btn-success{background:#10b981;color:#fff}.btn-success:hover{background:#0ea472}
 .btn-outline{background:transparent;border:1px solid #d0d5dd;color:#555}.btn-outline:hover{background:#f5f5f5}
 .actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
-.coupon-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:12px}
-.coupon-card{border:1px solid #e5e7eb;border-radius:8px;padding:14px;background:#fafbfc}
-.coupon-card .code{font-size:16px;font-weight:700;color:#4361ee;margin-bottom:8px;display:flex;align-items:center;gap:8px}
-.coupon-card .code .badge{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600}
-.badge-h{background:#dbeafe;color:#1d4ed8}.badge-f{background:#fef3c7;color:#92400e}
-.coupon-card .fr{display:flex;justify-content:space-between;padding:3px 0;font-size:12.5px;border-bottom:1px solid #f0f0f0}
-.coupon-card .fr:last-child{border-bottom:none}
-.coupon-card .fr .l{color:#888}.coupon-card .fr .v{font-weight:500;text-align:right;max-width:65%;word-break:break-all}
 .table-wrap{overflow-x:auto;margin-top:8px}
 table{width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap}
 th{background:#f1f3f5;font-weight:600;text-align:left;padding:8px 10px;position:sticky;top:0;border-bottom:2px solid #d0d5dd}
@@ -66,12 +58,7 @@ td input.wide{width:90px}
 
 <div id="parsedSection" class="hidden">
 <div class="card">
-<div class="card-title">📋 解析结果 <span id="formatTag" class="format-tag"></span></div>
-<div class="coupon-cards" id="couponCards"></div>
-</div>
-
-<div class="card">
-<div class="card-title">📊 输出表格</div>
+<div class="card-title">📊 输出表格 <span id="formatTag" class="format-tag"></span></div>
 <div class="actions" style="margin-bottom:12px">
 <button class="btn btn-success" onclick="exportXlsx()"> 导出 XLSX</button>
 <button class="btn btn-outline" onclick="exportCsv()"> 导出 CSV</button>
@@ -133,7 +120,7 @@ const FIELD_RULES = [
   {key:'validity', kw:['validity period','validity'], exact:['validity']},
   {key:'sku', kw:['eligible sku','product description','applicable','route'], exact:[]},
   {key:'payment', kw:['eligible payment','payment method'], exact:[]},
-  {key:'quota', kw:['quota','initial qty','initial quantity'], exact:['quantity']},
+  {key:'quota', kw:['quota','quantity','initial qty','initial quantity'], exact:['quantity']},
   {key:'mechanism', kw:['mechanism','discount rule','offer rule'], exact:['value']},
   {key:'newuser', kw:['new user','new customer'], exact:[]},
   {key:'peruid', kw:['per uid','usage limit','usage per','per account'], exact:['usage']},
@@ -289,19 +276,29 @@ function parseRangeDate(str) {
   const months = {jan: '1', feb: '2', mar: '3', apr: '4', may: '5', jun: '6', jul: '7', aug: '8', sep: '9', oct: '10', nov: '11', dec: '12'};
   let m;
 
-  // Range with 24-hour time: "9 Sep 00:00 - 9 Sep 23:59"
-  m = str.match(/(\d{1,2})\s+([A-Za-z]{3,})\s+\d{1,2}:\d{2}\s*[-–]\s*(\d{1,2})\s+([A-Za-z]{3,})\s+\d{1,2}:\d{2}/i);
+  // Range with 24-hour time: "9 Sep 00:00 - 9 Sep 23:59" 或 "7 Oct, 10:00 - 10 Oct 23:59"
+  // 月份与时间之间允许有逗号（需求表里常写成 "7 Oct, 10:00 - …"），否则会漏到下面的
+  // "5-8 August" 分支，把 "10:00" 的分钟 00 误当成开始日。
+  m = str.match(/(\d{1,2})\s+([A-Za-z]{3,})\s*,?\s*(\d{1,2}):\d{2}\s*[-–]\s*(\d{1,2})\s+([A-Za-z]{3,})\s*,?\s*\d{1,2}:\d{2}/i);
   if (m) {
     const m1 = months[m[2].toLowerCase().substring(0, 3)] || '';
-    const m2 = months[m[4].toLowerCase().substring(0, 3)] || '';
-    if (m1 && m2) return {startDate: m1 + '/' + m[1] + '/2026', endDate: m2 + '/' + m[3] + '/2026', tagTime: '12am'};
+    const m2 = months[m[5].toLowerCase().substring(0, 3)] || '';
+    if (m1 && m2) {
+      const h = parseInt(m[3]);
+      const tagTime = h === 0 ? '12am' : h < 12 ? h + 'am' : h === 12 ? '12pm' : (h - 12) + 'pm';
+      return {startDate: m1 + '/' + m[1] + '/2026', endDate: m2 + '/' + m[4] + '/2026', tagTime: tagTime};
+    }
   }
 
   // Range: "5-8 August"
-  m = str.match(/(\d{1,2})\s*[-–]\s*(\d{1,2})\s+([A-Za-z]{3,})/);
+  // 前面必须是行首/空白/逗号/括号——否则 "10:00 - 10 Oct" 里的分钟 00 会被当成开始日。
+  m = str.match(/(?:^|[\s,(])(\d{1,2})\s*[-–]\s*(\d{1,2})\s+([A-Za-z]{3,})/);
   if (m) {
     const mon = months[m[3].toLowerCase().substring(0, 3)] || '';
-    if (mon) return {startDate: mon + '/' + m[1] + '/2026', endDate: mon + '/' + m[2] + '/2026', tagTime: ''};
+    const d1 = parseInt(m[1]), d2 = parseInt(m[2]);
+    if (mon && d1 >= 1 && d1 <= 31 && d2 >= 1 && d2 <= 31) {
+      return {startDate: mon + '/' + m[1] + '/2026', endDate: mon + '/' + m[2] + '/2026', tagTime: ''};
+    }
   }
   // Single date with time: "5 Aug, 6PM" or "9 Sep, top up 11AM GMT+7"
   m = str.match(/(\d{1,2})\s+([A-Za-z]{3,})/);
@@ -785,6 +782,10 @@ function extractColumnKVFormat(rows) {
         // Check if fieldName is a date (e.g., "9 Sep", "10 Sep") - treat as quantity data
         const isDateField = fieldName.match(/^\d{1,2}\s+[A-Za-z]{3}/);
         if (isDateField) {
+          // 只有本组还没收到数量时，才把日期行当作数量明细。
+          // 否则这一行多半属于下一段的日期表头（例如 "7 Oct, 11AM"），
+          // 覆盖上去会把已经解析好的数量冲掉。
+          if (qtyRaw) continue;
           // Start collecting quantity data from date rows
           qtyRaw = fieldName + ' ' + value;
           for (let r2 = r + 1; r2 < rows.length; r2++) {
@@ -914,26 +915,7 @@ function handleFile(file) {
   reader.readAsText(file, 'UTF-8');
 }
 
-function renderAll() { renderCouponCards(); renderOutputTable(); }
-
-function renderCouponCards() {
-  document.getElementById('couponCards').innerHTML = coupons.map(function(c) {
-    return '<div class="coupon-card">' +
-      '<div class="code">' + esc(c.code) + ' <span class="badge ' + (c.product === 'H' ? 'badge-h' : 'badge-f') + '">' + c.product + '</span></div>' +
-      '<div class="fr"><span class="l">Currency</span><span class="v">' + esc(c.currency) + '</span></div>' +
-      '<div class="fr"><span class="l">SKU</span><span class="v">' + esc(c.sku) + '</span></div>' +
-      '<div class="fr"><span class="l">Mechanism</span><span class="v">' + esc(c._mechanism) + '</span></div>' +
-      '<div class="fr"><span class="l">Discount</span><span class="v">' + (c.discountDollar ? '$' + c.discountDollar : '') + (c.discountPct || '') + '</span></div>' +
-      '<div class="fr"><span class="l">Min Spend</span><span class="v">' + (c.minspendDollar ? '$' + c.minspendDollar : '') + '</span></div>' +
-      '<div class="fr"><span class="l">Cap</span><span class="v">' + (c.capDollar ? '$' + c.capDollar : '') + '</span></div>' +
-      '<div class="fr"><span class="l">Initial Qty</span><span class="v">' + c.initialQty + '</span></div>' +
-      '<div class="fr"><span class="l">Device</span><span class="v">' + esc(c.deviceLimit) + '</span></div>' +
-      '<div class="fr"><span class="l">Blacklist</span><span class="v">' + esc(c._aidsid) + '</span></div>' +
-      '<div class="fr"><span class="l">Validity</span><span class="v">' + esc(c._validity || c._releaseDate) + '</span></div>' +
-      (c._channel ? '<div class="fr"><span class="l">Channel</span><span class="v">' + esc(c._channel) + '</span></div>' : '') +
-    '</div>';
-  }).join('');
-}
+function renderAll() { renderOutputTable(); }
 
 const OUT_COLS = [
   {key: 'code', label: 'Code', edit: false},
