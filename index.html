@@ -43,13 +43,13 @@ td input.wide{width:90px}
 <body>
 <div class="container">
 <h1>🎫 优惠券需求读取器 <span style="font-size:14px;color:#999;font-weight:400">v3</span></h1>
-<p class="subtitle">自动识别 3 种格式，关键词智能匹配字段</p>
+<p class="subtitle">自动识别 4 种格式，关键词智能匹配字段</p>
 
 <div class="card">
 <div class="upload-area" id="dropZone">
 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
 <p>点击或拖拽上传 CSV 文件</p>
-<p class="hint">支持列式 / 键值对 / 列键值（Boombastrip）三种格式自动识别</p>
+<p class="hint">支持列式 / 键值对 / 列键值（Boombastrip）/ 转置式 四种格式自动识别</p>
 </div>
 <input type="file" id="fileInput" accept=".csv,.txt" style="display:none">
 </div>
@@ -128,8 +128,29 @@ const FIELD_RULES = [
   {key:'description', kw:['description','remark','note'], exact:['description']},
 ];
 
+// 需求表从 Excel / Google Sheets 导出时，常带一些"看起来像空格"的字符：
+// 不换行空格 U+00A0、窄不换行空格 U+202F、各种宽度的空格、全角空格……
+// 它们和普通空格不是同一个字符，会导致字段名匹配不上，所以统一换成普通空格。
+function normalizeSpaces(text) {
+  return text.replace(/[   -   　]/g, ' ');
+}
+
+// 读文件：先按 UTF-8 解。若出现替换字符（U+FFFD），说明文件不是 UTF-8
+// （常见于导出时用了 CP1252/Latin-1，例如 0xA0 单字节的不换行空格），改用 CP1252 重解。
+function decodeBuffer(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let text = new TextDecoder('utf-8').decode(bytes);
+  if (text.indexOf('�') !== -1) {
+    try {
+      const alt = new TextDecoder('windows-1252').decode(bytes);
+      if (alt.indexOf('�') === -1) text = alt;
+    } catch (e) { /* 浏览器不支持该编码就保持原样 */ }
+  }
+  return text;
+}
+
 function matchField(fieldName) {
-  const lower = fieldName.toLowerCase().trim();
+  const lower = normalizeSpaces(fieldName).toLowerCase().trim();
   if (!lower) return null;
   for (const rule of FIELD_RULES) { if (rule.exact && rule.exact.some(e => lower === e)) return rule.key; }
   for (const rule of FIELD_RULES) { if (rule.kw.some(k => lower.includes(k))) return rule.key; }
@@ -138,20 +159,42 @@ function matchField(fieldName) {
 
 // ========== Format Detection ==========
 function detectFormat(rows) {
-  for (let i = 0; i < Math.min(rows.length, 10); i++) {
+  // 注意：判定要扫全表，不能只看开头几行。
+  // 需求表常在前面放一段汇总表（如三档活动预算），券表本身从二三十行才开始。
+  // 这两条特征串（整格恰好等于）足够特殊，扫全表不会误判。
+  for (let i = 0; i < rows.length; i++) {
     if (rows[i].filter(c => c.trim() === 'Coupon ID').length >= 2) return 'column';
   }
-  for (let i = 0; i < Math.min(rows.length, 15); i++) {
+  for (let i = 0; i < rows.length; i++) {
     const pcn = rows[i].filter(c => c.trim() === 'Promo Code Name').length;
     if (pcn >= 2) return 'columnkv';
   }
+  // 转置式：字段名竖排在 A 列，每只券占一「列」（券码横向铺开）。
+  // 特征：某行 A 列是代码类字段名，且右侧有 ≥2 个非空值。
+  // 注意要和 Format 2 区分——Format 2 的同一行只有一个值，所以要求 ≥2。
+  for (let i = 0; i < rows.length; i++) {
+    if (matchField(rows[i][0] || '') !== 'code') continue;
+    let n = 0;
+    for (let j = 1; j < rows[i].length; j++) if ((rows[i][j] || '').trim()) n++;
+    if (n >= 2) return 'transposed';
+  }
+  // 键值对：看每行第一个非空单元格。有些表前面多一个空列（行首是逗号），
+  // 若只认第 0 列就会永远取到空值，导致识别不出来。
   let kvCount = 0;
-  for (let i = 0; i < Math.min(rows.length, 30); i++) {
-    const f = (rows[i][0] || '').trim();
+  for (let i = 0; i < rows.length; i++) {
+    const f = firstNonEmptyCell(rows[i]);
     if (f && matchField(f)) kvCount++;
   }
   if (kvCount >= 3) return 'keyvalue';
   return null;
+}
+
+function firstNonEmptyCell(row) {
+  for (let j = 0; j < row.length; j++) {
+    const v = (row[j] || '').trim();
+    if (v) return v;
+  }
+  return '';
 }
 
 // ========== Number Parser ==========
@@ -334,11 +377,20 @@ function parseQuantityText(str) {
   if (!str) return {total: 0, initialQty: 0, topupStart: '', topupTimes: 0, topupQty: 0};
   const dateEntries = [];
 
-  // Try format with separator: "9 Sep = 20" or "9 Sep: 20"
-  let entryRegex = /(\d{1,2})\s+([A-Za-z]{3,})\s*[=:]\s*(\d+)/gi;
+  // 优先认「日期 + 时间 + 冒号 + 数量」："23 Oct 10AM: 14" / "23 Oct 10:00: 14"
+  // 必须放在最前面：下面的"无分隔符"模式会把 "10AM" 里的 10 误当成数量。
+  let entryRegex = /(\d{1,2})\s+([A-Za-z]{3,})\s+\d{1,2}(?::\d{2})?\s*(?:[APap][Mm])?\s*[:=]\s*(\d+)/g;
   let m;
   while ((m = entryRegex.exec(str)) !== null) {
     dateEntries.push({day: parseInt(m[1]), month: m[2], qty: parseInt(m[3])});
+  }
+
+  // 再试带分隔符的："9 Sep = 20" 或 "9 Sep: 20"
+  if (dateEntries.length === 0) {
+    entryRegex = /(\d{1,2})\s+([A-Za-z]{3,})\s*[=:]\s*(\d+)/gi;
+    while ((m = entryRegex.exec(str)) !== null) {
+      dateEntries.push({day: parseInt(m[1]), month: m[2], qty: parseInt(m[3])});
+    }
   }
 
   // If no matches, try format without separator: "9 Sep 20" or "9 Sep  20"
@@ -515,6 +567,66 @@ function extractColumnFormat(rows) {
       }
 
       allCoupons.push(buildCouponFromFields(fields, startDate));
+    }
+  }
+  return allCoupons.filter(function(c) { return c && c.code; });
+}
+
+// ========== 转置式：字段名竖排在 A 列，每只券占一「列」 ==========
+// 例（Promo Code Brief）：
+//   Bank,            CITIBANK,      CITIBANK,      CITIBANK
+//   Promo Code Name, CITISQTTF500F, CITISQTTF120F, CITISQTTF65F
+//   Products,        All flight…,   All flight…,   All flight…
+//   Validity,        23 Oct 10:00- 23 Oct 10:00- 23 Oct 10:00-
+// 一行是一只券的一个字段；券与券之间靠「列」区分。
+function extractTransposedFormat(rows) {
+  var allCoupons = [];
+
+  // 先找出所有「券码行」：A 列是代码类字段名，且右侧有 ≥2 个非空值
+  var codeRows = [];
+  for (var i = 0; i < rows.length; i++) {
+    if (matchField(rows[i][0] || '') !== 'code') continue;
+    var n = 0;
+    for (var j = 1; j < rows[i].length; j++) if ((rows[i][j] || '').trim()) n++;
+    if (n >= 2) codeRows.push(i);
+  }
+  if (!codeRows.length) return allCoupons;
+
+  for (var ci = 0; ci < codeRows.length; ci++) {
+    var hri = codeRows[ci];
+    var stop = (ci + 1 < codeRows.length) ? codeRows[ci + 1] : rows.length;
+
+    // 这一段的券分别在哪几列
+    var cols = [];
+    for (var j = 1; j < rows[hri].length; j++) if ((rows[hri][j] || '').trim()) cols.push(j);
+
+    // 段标题（向上找最近的非空 A 列且不是字段名的行），用来兜底产线
+    var sectionTitle = '';
+    for (var u = hri - 1; u >= 0 && u >= hri - 4; u--) {
+      var t = (rows[u][0] || '').trim();
+      if (t && !matchField(t)) { sectionTitle = t; break; }
+    }
+    var sectionProduct = getProductCode(sectionTitle);
+
+    for (var gi = 0; gi < cols.length; gi++) {
+      var vc = cols[gi];
+      var fields = {};
+      fields.code = (rows[hri][vc] || '').trim();
+
+      for (var r = hri + 1; r < stop; r++) {
+        var fn = (rows[r][0] || '').trim();
+        if (!fn) continue;
+        var key = matchField(fn);
+        if (!key) continue;
+        var val = (rows[r][vc] || '').trim();
+        if (key === 'quota') fields.quota = val;
+        else if (!fields[key]) fields[key] = val;
+      }
+
+      if (!fields.code) continue;
+      var c = buildCouponFromFields(fields, '');
+      if (!c.product) c.product = sectionProduct;
+      allCoupons.push(c);
     }
   }
   return allCoupons.filter(function(c) { return c && c.code; });
@@ -888,19 +1000,32 @@ function handleFile(file) {
   const reader = new FileReader();
   reader.onload = function(e) {
     try {
-      const rows = parseCSV(e.target.result);
+      const text = normalizeSpaces(decodeBuffer(e.target.result));
+      const rows = parseCSV(text);
       const format = detectFormat(rows);
-      if (!format) throw new Error('无法识别 CSV 格式');
+      if (!format) {
+        // 报错时把「读到了什么」一并显示，便于判断是格式不支持还是文件本身有问题
+        const nCol = (rows[0] || []).length;
+        const preview = rows.slice(0, 3)
+          .map(function(r) { return r.filter(function(c) { return c.trim(); }).slice(0, 6).join(' | '); })
+          .filter(Boolean).join('  ／  ');
+        throw new Error('无法识别 CSV 格式。读到 ' + rows.length + ' 行 × ' + nCol +
+          ' 列；开头内容是：' + preview.slice(0, 200));
+      }
 
       if (format === 'column') coupons = extractColumnFormat(rows);
       else if (format === 'columnkv') coupons = extractColumnKVFormat(rows);
+      else if (format === 'transposed') coupons = extractTransposedFormat(rows);
       else coupons = extractKeyValueFormat(rows);
 
       if (!coupons.length) throw new Error('未解析到任何优惠券');
 
       autoCalcTopupTimes();
 
-      const fmtLabel = format === 'column' ? '列式 (Format 1)' : format === 'columnkv' ? '列键值 (Format 3)' : '键值对 (Format 2)';
+      const fmtLabel = format === 'column' ? '列式 (Format 1)'
+        : format === 'columnkv' ? '列键值 (Format 3)'
+        : format === 'transposed' ? '转置式 (Format 4)'
+        : '键值对 (Format 2)';
       const fmtClass = format === 'keyvalue' ? 'format-2' : 'format-1';
       document.getElementById('formatTag').className = 'format-tag ' + fmtClass;
       document.getElementById('formatTag').textContent = fmtLabel;
@@ -912,7 +1037,7 @@ function handleFile(file) {
       showStatus('❌ ' + err.message, 'err');
     }
   };
-  reader.readAsText(file, 'UTF-8');
+  reader.readAsArrayBuffer(file);
 }
 
 function renderAll() { renderOutputTable(); }
