@@ -163,10 +163,10 @@ function detectFormat(rows) {
   // 需求表常在前面放一段汇总表（如三档活动预算），券表本身从二三十行才开始。
   // 这两条特征串（整格恰好等于）足够特殊，扫全表不会误判。
   for (let i = 0; i < rows.length; i++) {
-    if (rows[i].filter(c => c.trim() === 'Coupon ID').length >= 2) return 'column';
+    if (rows[i].filter(c => normalizeSpaces(c).trim() === 'Coupon ID').length >= 2) return 'column';
   }
   for (let i = 0; i < rows.length; i++) {
-    const pcn = rows[i].filter(c => c.trim() === 'Promo Code Name').length;
+    const pcn = rows[i].filter(c => normalizeSpaces(c).trim() === 'Promo Code Name').length;
     if (pcn >= 2) return 'columnkv';
   }
   // 转置式：字段名竖排在 A 列，每只券占一「列」（券码横向铺开）。
@@ -195,6 +195,21 @@ function firstNonEmptyCell(row) {
     if (v) return v;
   }
   return '';
+}
+
+// 取一行里的「字段名」和「值」：字段名 = 第一个非空单元格，值 = 它右边第一个非空单元格。
+// 用来兼容「每行前面多一个空列」的表（行首是逗号、字段名其实在第 1 列、值在第 2 列）。
+function pickLabelValue(row) {
+  let li = -1;
+  for (let j = 0; j < row.length; j++) {
+    if ((row[j] || '').trim()) { li = j; break; }
+  }
+  if (li < 0) return { label: '', value: '' };
+  let value = '';
+  for (let j = li + 1; j < row.length; j++) {
+    if ((row[j] || '').trim()) { value = row[j].trim(); break; }
+  }
+  return { label: row[li].trim(), value: value };
 }
 
 // ========== Number Parser ==========
@@ -377,12 +392,23 @@ function parseQuantityText(str) {
   if (!str) return {total: 0, initialQty: 0, topupStart: '', topupTimes: 0, topupQty: 0};
   const dateEntries = [];
 
+  // 新版写法：「Auto top-up 31 on 11 Nov 00:00」——**数量在前、日期在后**。
+  // 必须放在最前面：下面的模式会被它误匹配成 day=11 / month=Nov / qty=00。
+  // 第一行就是初始量（用户 2026-10-28 确认：「第一天的数据就是 initial qty」）。
+  let autoM;
+  const autoRegex = /Auto\s*top[-\s]*up\s*(\d+)\s*on\s*(\d{1,2})\s+([A-Za-z]{3,})/gi;
+  while ((autoM = autoRegex.exec(str)) !== null) {
+    dateEntries.push({day: parseInt(autoM[2]), month: autoM[3], qty: parseInt(autoM[1])});
+  }
+
   // 优先认「日期 + 时间 + 冒号 + 数量」："23 Oct 10AM: 14" / "23 Oct 10:00: 14"
   // 必须放在最前面：下面的"无分隔符"模式会把 "10AM" 里的 10 误当成数量。
-  let entryRegex = /(\d{1,2})\s+([A-Za-z]{3,})\s+\d{1,2}(?::\d{2})?\s*(?:[APap][Mm])?\s*[:=]\s*(\d+)/g;
-  let m;
-  while ((m = entryRegex.exec(str)) !== null) {
-    dateEntries.push({day: parseInt(m[1]), month: m[2], qty: parseInt(m[3])});
+  if (dateEntries.length === 0) {
+    let entryRegex = /(\d{1,2})\s+([A-Za-z]{3,})\s+\d{1,2}(?::\d{2})?\s*(?:[APap][Mm])?\s*[:=]\s*(\d+)/g;
+    let m;
+    while ((m = entryRegex.exec(str)) !== null) {
+      dateEntries.push({day: parseInt(m[1]), month: m[2], qty: parseInt(m[3])});
+    }
   }
 
   // 再试带分隔符的："9 Sep = 20" 或 "9 Sep: 20"
@@ -417,7 +443,20 @@ function parseQuantityText(str) {
     const lastD = dateEntries[dateEntries.length - 1];
     const lastMon = months[lastD.month.toLowerCase().substring(0,3)] || '';
     const endDate = lastMon ? lastMon + '/' + lastD.day + '/2026' : '';
-    return {total: total, initialQty: initialQty, topupStart: topupStart, topupTimes: topupTimes, topupQty: topupQty, endDate: endDate};
+    // 间隔：前两个日期的天数差（不能写死 7 天——很多表是每天加一次，
+    // 写死会导致 End 被算到很后面，例如 11/12 加 3 次被算成 12/3）
+    let interval = 0;
+    if (dateEntries.length > 1) {
+      const m1 = months[dateEntries[0].month.toLowerCase().substring(0,3)];
+      const m2 = months[dateEntries[1].month.toLowerCase().substring(0,3)];
+      if (m1 && m2) {
+        const d1 = new Date(2026, +m1 - 1, dateEntries[0].day);
+        const d2 = new Date(2026, +m2 - 1, dateEntries[1].day);
+        interval = Math.round((d2 - d1) / 86400000);
+      }
+    }
+    // explicit: 明细里逐条列了日期，次数已经确定，后面不要再按间隔重算
+    return {total: total, initialQty: initialQty, topupStart: topupStart, topupTimes: topupTimes, topupQty: topupQty, endDate: endDate, interval: interval, explicit: true};
   }
   const n = parseInt(str);
   const val = isNaN(n) ? 0 : n;
@@ -445,6 +484,21 @@ function autoCalcTopupTimes() {
       const dayMap = {sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6};
       if (dayMap[c._autoInterval.toLowerCase()] !== undefined) c.topupInterval = 7;
     }
+    // topup 次数分三种情况，只有第 2 种才按间隔推算：
+    //
+    // ① 数量明细逐条列了日期（"23 Oct 10AM: 14 / 24 Oct: 9 / 25 Oct: 6"）
+    //    → 次数 = 日期数 - 1，parseQuantityText 已算好，不能覆盖。
+    //    曾经出过 bug：CITIFLYMORE 明细是 26/27/28 Oct，但 Validity 到 11/3，
+    //    按间隔重算得出 8 次，实际只加 2 次。
+    //
+    // ② Validity 里明确给了节奏（"Drop at 12PM every Wednesday"）
+    //    → 没有具体日期，只能按 (到期日 - 开始日) ÷ 间隔 推算。
+    //
+    // ③ 数量就是个纯数字、没写哪天加多少（如 "20"）
+    //    → 按一次性投放处理，次数 = 0。不要拿 Validity 的跨度去推。
+    //    用户口径（2026-10-09）：「没有明确哪一天 qty 是多少就当作一次性」。
+    if (c._qtyExplicit) return;
+    if (!c._autoInterval) { c.topupTimes = 0; return; }
     const s = parseDateMDY(c.startDate || c.topupDateStart);
     const e = parseDateMDY(c._expireDate);
     if (s && e && c.topupInterval > 0) {
@@ -476,7 +530,11 @@ const PRODUCT_CODES = {
   'transfer': 'A',
   'bundle': 'X',
   'bundlesave': 'X',
-  'bundle&save': 'X'
+  'bundle&save': 'X',
+  // 需求表里偶尔用 "B&S / Biz & First" 指商务舱+头等舱（属于机票）
+  'b&s': 'F',
+  'biz & first': 'F',
+  'business & first': 'F'
 };
 
 function getProductCode(str) {
@@ -500,7 +558,7 @@ function extractColumnFormat(rows) {
   for (var hri = 0; hri < rows.length; hri++) {
     var pcnCount = 0;
     for (var j = 0; j < rows[hri].length; j++) {
-      if (rows[hri][j].trim() === 'Coupon ID') pcnCount++;
+      if (normalizeSpaces(rows[hri][j]).trim() === 'Coupon ID') pcnCount++;
     }
     if (pcnCount < 1) continue;
 
@@ -516,9 +574,11 @@ function extractColumnFormat(rows) {
     }
 
     // Find coupon column groups
+    // 注意要从第 0 列开始扫：有些表「Coupon ID」直接放在 A 列（左边那个券块），
+    // 从 1 开始会把整块漏掉（2026-10-28 用户报「5 个券只读出 3 个」就是这个原因）。
     var groups = [];
-    for (var i = 1; i < hr.length; i++) {
-      if (hr[i].trim() === 'Coupon ID' && i + 1 < hr.length) groups.push({fc: i, vc: i + 1});
+    for (var i = 0; i < hr.length; i++) {
+      if (normalizeSpaces(hr[i]).trim() === 'Coupon ID' && i + 1 < hr.length) groups.push({fc: i, vc: i + 1});
     }
     if (!groups.length) continue;
 
@@ -533,7 +593,7 @@ function extractColumnFormat(rows) {
       for (var r = hri + 1; r < rows.length; r++) {
         // Stop at next section header
         var nextPcn = 0;
-        for (var nj = 0; nj < rows[r].length; nj++) { if (rows[r][nj].trim() === 'Coupon ID') nextPcn++; }
+        for (var nj = 0; nj < rows[r].length; nj++) { if (normalizeSpaces(rows[r][nj]).trim() === 'Coupon ID') nextPcn++; }
         if (nextPcn > 0 && r !== hri) break;
 
         var fn = (rows[r][g.fc] || '').trim();
@@ -673,8 +733,8 @@ function buildCouponFromFields(fields, startDate) {
       const q = parseQuantityText(fields.quota || '');
       return q.topupTimes || 0;
     })(),
-    _releaseDate: fields.release || '',
-    _expireDate: fields.expire || v.endDate || '',
+    _releaseDate: fields.release ? (parseDateTimeStr(fields.release).date || fields.release) : '',
+    _expireDate: fields.expire ? (parseDateTimeStr(fields.expire).date || fields.expire) : (v.endDate || ''),
     _mechanism: fields.mechanism || '',
     _locale: fields.locale || '',
     _aidsid: fields.aidsid || '',
@@ -686,6 +746,7 @@ function buildCouponFromFields(fields, startDate) {
     _channel: fields.channel || '',
     _description: fields.description || '',
     _autoInterval: v._everyDay || null,
+    _qtyExplicit: parseQuantityText(fields.quota || '').explicit || false,
   };
 }
 
@@ -719,7 +780,10 @@ function extractKeyValueFormat(rows) {
   let productHint = '', desc = '';
 
   for (let i = 0; i < rows.length; i++) {
-    const c0 = (rows[i][0] || '').trim(), c1 = (rows[i][1] || '').trim();
+    // 有些需求表每行前面多一个空列（例如导出后每行都以逗号开头），字段名在第 1 列、值在第 2 列。
+    // 所以按「第一个非空格 = 字段名，它右边第一个非空格 = 值」来取，不能写死 [0] / [1]。
+    const lv = pickLabelValue(rows[i]);
+    const c0 = lv.label, c1 = lv.value;
     if (!c0 && !c1) {
       if (Object.keys(currentBlock).length >= 3) { currentBlock._hint = productHint; currentBlock._desc = desc; couponBlocks.push(currentBlock); }
       currentBlock = {};
@@ -746,9 +810,12 @@ function extractKeyValueFormat(rows) {
       product = getProductCode(b._hint);
     }
     const ccM = (b.budget || '').match(/(\d{3,})/);
-    const topupQty = parseInt(v.topupQty) || 0;
-    const totalQty = parseInt(v.totalQty) || parseInt(b.quota) || 0;
-    const initialQty = topupQty || parseInt(b.quota) || totalQty;
+    // 数量可能是多行明细（"Total: 76 / 11 Nov 12AM: 46 qty / 12 Nov 12AM: 10 qty …"），
+    // 不能直接 parseInt(b.quota)，否则读到 "Total:" 就变成 0。统一走 parseQuantityText。
+    const q = parseQuantityText(b.quota || '');
+    const topupQty = q.topupQty || parseInt(v.topupQty) || 0;
+    const totalQty = q.total || parseInt(v.totalQty) || 0;
+    const initialQty = q.initialQty || parseInt(b.quota) || totalQty;
 
     return {
       code: b.code || '',
@@ -768,10 +835,11 @@ function extractKeyValueFormat(rows) {
       discountPct: val.discountPct,
       capDollar: val.capDollar,
       initialQty: initialQty,
-      topupDateStart: v.startDate || '',
-      topupInterval: 7,
+      topupDateStart: q.topupStart || v.startDate || '',
+      // 有明细日期就用实际间隔（逐日加量 = 1），没有才退回默认 7 天
+      topupInterval: (q.interval && q.interval > 0) ? q.interval : 7,
       topupQty: topupQty,
-      topupTimes: 0,
+      topupTimes: q.topupTimes || 0,
       _releaseDate: v.startDate || '',
       _expireDate: v.endDate || '',
       _mechanism: b.mechanism || '',
@@ -782,6 +850,7 @@ function extractKeyValueFormat(rows) {
       _channel: b.channel || '',
       _description: b.description || '',
       _autoInterval: v._everyDay || null,
+      _qtyExplicit: parseQuantityText(b.quota || '').explicit || false,
     };
   }).filter(function(c) { return c && c.code; });
 }
@@ -795,7 +864,7 @@ function extractColumnKVFormat(rows) {
   for (let ri = 0; ri < rows.length; ri++) {
     let pcnCount = 0;
     for (let j = 0; j < rows[ri].length; j++) {
-      if (rows[ri][j].trim() === 'Promo Code Name') pcnCount++;
+      if (normalizeSpaces(rows[ri][j]).trim() === 'Promo Code Name') pcnCount++;
     }
     if (pcnCount >= 1) headerRows.add(ri);
   }
@@ -803,7 +872,7 @@ function extractColumnKVFormat(rows) {
   for (let ri = 0; ri < rows.length; ri++) {
     const pcnCols = [];
     for (let j = 0; j < rows[ri].length; j++) {
-      if (rows[ri][j].trim() === 'Promo Code Name') pcnCols.push(j);
+      if (normalizeSpaces(rows[ri][j]).trim() === 'Promo Code Name') pcnCols.push(j);
     }
     if (pcnCols.length < 1) continue;
 
@@ -978,6 +1047,7 @@ function extractColumnKVFormat(rows) {
         _channel: fields.channel || '',
         _description: fields.description || '',
         _autoInterval: null,
+        _qtyExplicit: qtyInfo.explicit || false,
       });
     }
   }
